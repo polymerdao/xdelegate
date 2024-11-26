@@ -1,15 +1,19 @@
 pragma solidity ^0.8.0;
 
-/**
- * @notice Destination chain entrypoint contract for fillers relaying cross chain message containing 7702 delegated
- * calldata.
- */
-
  interface IERC20 {
     function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
     function forceApprove(address spender, uint256 amount) external returns (bool);
  }
 
+
+/**
+ * @notice Destination chain entrypoint contract for fillers relaying cross chain message containing 7702 delegated
+ * calldata.
+ * @dev This is a simple pass-through contract that is encouraged to be modified by different xchain settlement systems
+ * that might want to add features such as exclusive filling, deadlines, fee-collection, etc.
+ * @dev This could be replaced by the Across SpokePool, for example, which would then delegate execution
+ * to the XAccount contract that the user trusts.
+ */
  contract Outbox {
     address xAccount = address(123456789);
 
@@ -41,6 +45,10 @@ pragma solidity ^0.8.0;
     ) external {
         fundUserAndApproveXAccount(callsByUser);
 
+        // TODO: Protect against duplicate fills.
+        // require(!fillhash, "Already filled");
+        // fills[fillhash] = true;
+
         // execute calls
         XAccount(callsByUser.user).xExecute(
                 userPublicKey,
@@ -51,8 +59,11 @@ pragma solidity ^0.8.0;
     }
 }
 
-// Singleton contract used by all users who want to sign data on origin chain and delegate execution of their calldata
-// on this chain to this contract. User must trust that this contract does what it they want it to do.
+/**
+ * @notice Singleton contract used by all users who want to sign data on origin chain and delegate execution of 
+ * their calldata on this chain to this contract. 
+ * @dev User must trust that this contract does what it they want it to do.
+ */
 contract XAccount {
     error NotSelf();
     error CallReverted(uint256 index, Outbox.Call[] calls);
