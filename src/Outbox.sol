@@ -1,5 +1,8 @@
 pragma solidity ^0.8.0;
 
+import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
+
+
  interface IERC20 {
     function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
     function forceApprove(address spender, uint256 amount) external returns (bool);
@@ -41,19 +44,21 @@ pragma solidity ^0.8.0;
     function fill(
         address userPublicKey,
         bytes calldata signature,
-        CallByUser memory callsByUser
+        CallByUser memory callsByUser,
+        bytes32 signedCallDataHash
     ) external {
         fundUserAndApproveXAccount(callsByUser);
 
         // TODO: Protect against duplicate fills.
-        // require(!fillhash, "Already filled");
-        // fills[fillhash] = true;
+        // require(!signedCallDataHash, "Already filled");
+        // fills[signedCallDataHash] = true;
 
         // execute calls
         XAccount(callsByUser.user).xExecute(
                 userPublicKey,
                 callsByUser,
-                signature
+                signature,
+                signedCallDataHash
             );
         // emit Executed(...) // this gets picked up on sending chain via receipt proof 
     }
@@ -72,9 +77,10 @@ contract XAccount {
     function xExecute(
         address publicKey,
         Outbox.CallByUser memory callByUser,
-        bytes calldata signature
+        bytes calldata signature,
+        bytes32 signedCallDataHash
     ) external {
-        _verify(publicKey, signature, callByUser);
+        _verify(publicKey, signature, signedCallDataHash);
         _fundUser(callByUser);
         _attemptCalls(callByUser.calls);
     }
@@ -82,10 +88,10 @@ contract XAccount {
     function _verify(
         address publicKey,
         bytes calldata signature,
-        Outbox.CallByUser memory callByUser
+        bytes32 signedCallDataHash
     ) internal view returns (bool) {
-        // verify signature by user emitted on origin chain over calls & assets
-        return true;
+        // TODO: Verify signed call data hash and callByUser are the same data.
+        return SignatureChecker.isValidSignatureNow(publicKey, signedCallDataHash, signature);
     }
 
     function _attemptCalls(Outbox.Call[] memory calls) internal {
