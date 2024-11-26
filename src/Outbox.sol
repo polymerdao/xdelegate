@@ -65,13 +65,7 @@ pragma solidity ^0.8.0;
  * @dev User must trust that this contract does what it they want it to do.
  */
 contract XAccount {
-    error NotSelf();
     error CallReverted(uint256 index, Outbox.Call[] calls);
-
-    modifier onlySelf() {
-        _requireSelf();
-        _;
-    }
 
     // Entrypoint function to be called by Outbox contract on this chain. Should pull funds from Outbox
     // to user and then execute calldata. Assume user has 7702-delegated msg.sender already to this contract.
@@ -94,7 +88,7 @@ contract XAccount {
         return true;
     }
 
-    function _attemptCalls(Outbox.Call[] memory calls) internal onlySelf {
+    function _attemptCalls(Outbox.Call[] memory calls) internal {
         for (uint256 i = 0; i < calls.length; ++i) {
 
             // TODO: Validate target
@@ -111,11 +105,5 @@ contract XAccount {
         for (uint i = 0; i < call.assets.length; i++) {
             call.assets[i].token.transferFrom(msg.sender, call.user, call.assets[i].amount);
         }
-    }
-
-    function _requireSelf() internal view {
-        // Must be called by this contract to ensure that this cannot be triggered without the explicit consent of the
-        // depositor (for a valid relay).
-        if (msg.sender != address(this)) revert NotSelf();
     }
 }
