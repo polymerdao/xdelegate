@@ -2,12 +2,10 @@ pragma solidity ^0.8.0;
 
 import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 
-
- interface IERC20 {
+interface IERC20 {
     function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
     function forceApprove(address spender, uint256 amount) external returns (bool);
- }
-
+}
 
 /**
  * @notice Destination chain entrypoint contract for fillers relaying cross chain message containing delegated
@@ -20,7 +18,7 @@ import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/Signa
  * combine its logic with the XAccount contract to avoid the extra transferFrom and approve steps required in a more
  * complex escrow system.
  */
- contract Outbox {
+contract Outbox {
     // The address of the singleton XAccount contract that users have set as their delegate code.
     address public xAccount = address(2);
 
@@ -28,14 +26,16 @@ import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/Signa
         IERC20 token;
         uint256 amount;
     }
+
     struct Call {
         address target;
         bytes callData;
     }
+
     struct CallByUser {
         address user; // User who delegated calldata and funded assets on origin chain.
         Asset asset; // token & amount, used to fund execution of calldata
-        Call[] calls; // calldata to execute 
+        Call[] calls; // calldata to execute
     }
 
     // Called by filler, who sees ERC7683 intent emitted on origin chain
@@ -51,9 +51,9 @@ import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/Signa
         _verify7702Delegation(publicKey, signature, signedERC7682Message);
 
         // Pull funds into this settlement contract and perform any steps necessary to ensure that filler
-        // receives a refund of their assets. Most importantly, we need to ensure tht the `callsByUser` data 
+        // receives a refund of their assets. Most importantly, we need to ensure tht the `callsByUser` data
         // is the same data that was emitted on the origin chain by the `user` in the ERC7683 intent, and secondly
-        // that the `publicKey` is the same as the one that signed the `callsByUser` to produce the 
+        // that the `publicKey` is the same as the one that signed the `callsByUser` to produce the
         // `signedERC7682Message`.
         _fundUserAndApproveXAccount(callsByUser);
 
@@ -63,28 +63,21 @@ import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/Signa
 
         // TODO: Protect fillers from collisions with other fillers.
 
-        // The following call will only succeed if the user has set a 7702 authorization to set its code 
+        // The following call will only succeed if the user has set a 7702 authorization to set its code
         // equal to the XAccount contract. The filler should have
         // seen the calldata emitted in an `Open` ERC7683 event on the sending chain.
-        XAccount(callsByUser.user).xExecute(
-                publicKey,
-                callsByUser,
-                signature,
-                signedERC7682Message
-            );
+        XAccount(callsByUser.user).xExecute(publicKey, callsByUser, signature, signedERC7682Message);
 
         // Perform any final steps required to prove that filler has successfully filled the ERC7683 intent.
-        // e.g. emit Executed(...) // this gets picked up on sending chain via receipt proof 
+        // e.g. emit Executed(...) // this gets picked up on sending chain via receipt proof
     }
 
     // Prove that filler succesfully relayed the ERC7683 intent containing a 7702 delegation
-    // to the xAccount contract on this chain. 
-    function _verify7702Delegation(
-        address publicKey,
-        bytes calldata signature,
-        bytes32 signedERC7682Message
-    ) internal {
-        // TODO: Prove that signedERC7682Message contains the 7702 delegation and that this transaction 
+    // to the xAccount contract on this chain.
+    function _verify7702Delegation(address publicKey, bytes calldata signature, bytes32 signedERC7682Message)
+        internal
+    {
+        // TODO: Prove that signedERC7682Message contains the 7702 delegation and that this transaction
         // (tx.authorization?) contains the same data including setting XAccount as the code contract.
     }
 
@@ -101,15 +94,15 @@ import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/Signa
 }
 
 /**
- * @notice Singleton contract used by all users who want to sign data on origin chain and delegate execution of 
- * their calldata on this chain to this contract. 
+ * @notice Singleton contract used by all users who want to sign data on origin chain and delegate execution of
+ * their calldata on this chain to this contract.
  * @dev User must trust that this contract's logic.
  */
 contract XAccount {
     error CallReverted(uint256 index, Outbox.Call[] calls);
 
     // Entrypoint function to be called by Outbox contract on this chain. Should pull funds from Outbox
-    // to user's EOA and then execute calldata that will have it msg.sender = user EOA. 
+    // to user's EOA and then execute calldata that will have it msg.sender = user EOA.
     // Assume user has 7702-delegated code already to this contract.
     function xExecute(
         address publicKey,
@@ -122,11 +115,11 @@ contract XAccount {
         _attemptCalls(callByUser.calls);
     }
 
-    function _verify(
-        address publicKey,
-        bytes calldata signature,
-        bytes32 signedCallDataHash
-    ) internal view returns (bool) {
+    function _verify(address publicKey, bytes calldata signature, bytes32 signedCallDataHash)
+        internal
+        view
+        returns (bool)
+    {
         // TODO: Verify signed call data hash includes both the expected callByUser data. This might
         // need to be done in the Outbox contract, but not sure yet. I think its a useful primitive if this contract
         // always ensures that there is a link between callByUser, signedCallDataHash, and signature.
@@ -135,11 +128,10 @@ contract XAccount {
 
     function _attemptCalls(Outbox.Call[] memory calls) internal {
         for (uint256 i = 0; i < calls.length; ++i) {
-
             // TODO: Validate target
 
             // TODO: Handle msg.value
-            (bool success, ) = calls[i].target.call(calls[i].callData);
+            (bool success,) = calls[i].target.call(calls[i].callData);
             if (!success) revert CallReverted(i, calls);
         }
     }
