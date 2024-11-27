@@ -58,7 +58,10 @@ import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/Signa
         bytes32 signedCallDataHash
     ) external {
         // Pull funds into this settlement contract and perform any steps necessary to ensure that filler
-        // receives a refund of their assets.
+        // receives a refund of their assets. Most importantly, we need to ensure tht the `callsByUser` data 
+        // is the same data that was emitted on the origin chain by the `user` in the ERC7683 intent, and secondly
+        // that the `publicKey` is the same as the one that signed the `callsByUser` to produce the 
+        // `signedCallDataHash`.
         fundUserAndApproveXAccount(callsByUser);
 
         // TODO: Protect against duplicate fills.
@@ -109,7 +112,9 @@ contract XAccount {
         bytes calldata signature,
         bytes32 signedCallDataHash
     ) internal view returns (bool) {
-        // TODO: Verify signed call data hash includes both the expected callByUser data.
+        // TODO: Verify signed call data hash includes both the expected callByUser data. This might
+        // need to be done in the Outbox contract, but not sure yet. I think its a useful primitive if this contract
+        // always ensures that there is a link between callByUser, signedCallDataHash, and signature.
         return SignatureChecker.isValidSignatureNow(publicKey, signedCallDataHash, signature);
     }
 
