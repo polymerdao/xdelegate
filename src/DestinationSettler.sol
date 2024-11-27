@@ -12,6 +12,7 @@ struct Asset {
 struct Call {
     address target;
     bytes callData;
+    uint256 value;
 }
 
 struct CallByUser {
@@ -55,7 +56,7 @@ contract DestinationSettler {
         // The following call will only succeed if the user has set a 7702 authorization to set its code
         // equal to the XAccount contract. The filler should have
         // seen the calldata emitted in an `Open` ERC7683 event on the sending chain.
-        XAccount(callsByUser.user).xExecute(publicKey, userCalldata, signature);
+        XAccount(payable(callsByUser.user)).xExecute(publicKey, userCalldata, signature);
 
         // Perform any final steps required to prove that filler has successfully filled the ERC7683 intent.
         // e.g. emit Executed(...) // this gets picked up on sending chain via receipt proof
@@ -85,6 +86,7 @@ contract XAccount {
     using SafeERC20 for IERC20;
 
     error CallReverted(uint256 index, Call[] calls);
+    error InvalidCall(uint256 index, Call[] calls);
 
     // Entrypoint function to be called by DestinationSettler contract on this chain. Should pull funds
     // to user's EOA and then execute calldata that will have it msg.sender = user EOA.
@@ -119,10 +121,14 @@ contract XAccount {
 
     function _attemptCalls(Call[] memory calls) internal {
         for (uint256 i = 0; i < calls.length; ++i) {
-            // TODO: Validate target
+            Call memory call = calls[i];
 
-            // TODO: Handle msg.value
-            (bool success,) = calls[i].target.call(calls[i].callData);
+            // If we are calling an EOA with calldata, assume target was incorrectly specified and revert.
+            if (call.callData.length > 0 && call.target.code.length == 0) {
+                revert InvalidCall(i, calls);
+            }
+
+            (bool success,) = call.target.call{value: call.value}(call.callData);
             if (!success) revert CallReverted(i, calls);
         }
     }
@@ -130,4 +136,7 @@ contract XAccount {
     function _fundUser(CallByUser memory call) internal {
         call.asset.token.safeTransferFrom(msg.sender, call.user, call.asset.amount);
     }
+
+    // Used if the caller is trying to unwrap the native token to this contract.
+    receive() external payable {}
 }
