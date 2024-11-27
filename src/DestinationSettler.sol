@@ -1,11 +1,8 @@
 pragma solidity ^0.8.0;
 
 import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
-
-interface IERC20 {
-    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
-    function forceApprove(address spender, uint256 amount) external returns (bool);
-}
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 struct Asset {
     IERC20 token;
@@ -35,6 +32,8 @@ struct CallByUser {
  * complex escrow system.
  */
 contract DestinationSettler {
+    using SafeERC20 for IERC20;
+
     // The address of the singleton XAccount contract that users have set as their delegate code.
     address public xAccount = address(2);
 
@@ -69,7 +68,7 @@ contract DestinationSettler {
     function _fundUserAndApproveXAccount(CallByUser memory call) internal {
         // TODO: Link the escrowed funds back to the user in case the delegation step fails, we don't want
         // user to lose access to funds.
-        call.asset.token.transferFrom(msg.sender, address(this), call.asset.amount);
+        call.asset.token.safeTransferFrom(msg.sender, address(this), call.asset.amount);
         call.asset.token.forceApprove(xAccount, call.asset.amount);
     }
 }
@@ -83,6 +82,8 @@ contract DestinationSettler {
  * 7702 delegations they want to delegate to a filler on this chain to bring on-chain.
  */
 contract XAccount {
+    using SafeERC20 for IERC20;
+
     error CallReverted(uint256 index, Call[] calls);
 
     // Entrypoint function to be called by DestinationSettler contract on this chain. Should pull funds
@@ -127,6 +128,6 @@ contract XAccount {
     }
 
     function _fundUser(CallByUser memory call) internal {
-        call.asset.token.transferFrom(msg.sender, call.user, call.asset.amount);
+        call.asset.token.safeTransferFrom(msg.sender, call.user, call.asset.amount);
     }
 }
