@@ -12,10 +12,13 @@ import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/Signa
 /**
  * @notice Destination chain entrypoint contract for fillers relaying cross chain message containing delegated
  * calldata.
- * @dev This is a simple pass-through contract that is encouraged to be modified by different xchain settlement systems
+ * @dev This is a simple escrow contract that is encouraged to be modified by different xchain settlement systems
  * that might want to add features such as exclusive filling, deadlines, fee-collection, etc.
- * @dev This could be replaced by the Across SpokePool, for example, which would then delegate execution
- * to the XAccount contract that the user has set as their delegate code.
+ * @dev This could be replaced by the Across SpokePool, for example, which gives fillers many features with which
+ * to protect themselves from malicious users and moreover allows them to provide transparent pricing to users.
+ * However, this contract could be bypassed almost completely by lightweight settlement systems that could essentially
+ * combine its logic with the XAccount contract to avoid the extra transferFrom and approve steps required in a more
+ * complex escrow system.
  */
  contract Outbox {
     // The address of the singleton XAccount contract that users have set as their delegate code.
@@ -31,19 +34,19 @@ import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/Signa
     }
     struct CallByUser {
         address user; // User who delegated calldata and funded assets on origin chain.
-        Asset[] assets; // token & amount, used to fund execution of calldata
+        Asset asset; // token & amount, used to fund execution of calldata
         Call[] calls; // calldata to execute 
     }
 
     // Pull funds into this settlement contract as escrow and use to execute user's calldata. Escrowed
     // funds will be paid back to filler after this contract successfully verifies the settled intent.
+    // This step could be skipped by lightweight escrow systems that don't need to perform additional
+    // validation on the filler's actions.
     function fundUserAndApproveXAccount(CallByUser memory call) public {
-        for (uint i = 0; i < call.assets.length; i++) {
-            // TODO: Link the escrowed funds back to the user in case the delegation step fails, we don't want
-            // user to lose access to funds.
-            call.assets[i].token.transferFrom(msg.sender, address(this), call.assets[i].amount);
-            call.assets[i].token.forceApprove(xAccount, call.assets[i].amount);
-        }
+        // TODO: Link the escrowed funds back to the user in case the delegation step fails, we don't want
+        // user to lose access to funds.
+        call.asset.token.transferFrom(msg.sender, address(this), call.asset.amount);
+        call.asset.token.forceApprove(xAccount, call.asset.amount);
     }
 
     // Called by filler, who sees ERC7683 intent emitted on origin chain
@@ -122,8 +125,6 @@ contract XAccount {
     }
 
     function _fundUser(Outbox.CallByUser memory call) internal {
-        for (uint i = 0; i < call.assets.length; i++) {
-            call.assets[i].token.transferFrom(msg.sender, call.user, call.assets[i].amount);
-        }
+        call.asset.token.transferFrom(msg.sender, call.user, call.asset.amount);
     }
 }
