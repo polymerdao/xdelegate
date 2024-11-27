@@ -7,6 +7,22 @@ interface IERC20 {
     function forceApprove(address spender, uint256 amount) external returns (bool);
 }
 
+struct Asset {
+    IERC20 token;
+    uint256 amount;
+}
+
+struct Call {
+    address target;
+    bytes callData;
+}
+
+struct CallByUser {
+    address user; // User who delegated calldata and funded assets on origin chain.
+    Asset asset; // token & amount, used to fund execution of calldata
+    Call[] calls; // calldata to execute
+}
+
 /**
  * @notice Destination chain entrypoint contract for fillers relaying cross chain message containing delegated
  * calldata.
@@ -18,30 +34,14 @@ interface IERC20 {
  * combine its logic with the XAccount contract to avoid the extra transferFrom and approve steps required in a more
  * complex escrow system.
  */
-contract Outbox {
+contract DestinationSettler {
     // The address of the singleton XAccount contract that users have set as their delegate code.
     address public xAccount = address(2);
-
-    struct Asset {
-        IERC20 token;
-        uint256 amount;
-    }
-
-    struct Call {
-        address target;
-        bytes callData;
-    }
-
-    struct CallByUser {
-        address user; // User who delegated calldata and funded assets on origin chain.
-        Asset asset; // token & amount, used to fund execution of calldata
-        Call[] calls; // calldata to execute
-    }
 
     // Called by filler, who sees ERC7683 intent emitted on origin chain
     // containing the callsByUser data to be executed following a 7702 delegation.
     function fill(address publicKey, bytes memory userCalldata, bytes calldata signature) external {
-        (CallByUser memory callsByUser,) = abi.decode(userCalldata, (Outbox.CallByUser, bytes));
+        (CallByUser memory callsByUser,) = abi.decode(userCalldata, (CallByUser, bytes));
 
         // Pull funds into this settlement contract and perform any steps necessary to ensure that filler
         // receives a refund of their assets.
@@ -74,6 +74,8 @@ contract Outbox {
     }
 }
 
+// TODO: Move to separate file once we are more confident in architecture. For now keep here for readability.
+
 /**
  * @notice Singleton contract used by all users who want to sign data on origin chain and delegate execution of
  * their calldata on this chain to this contract.
@@ -81,9 +83,9 @@ contract Outbox {
  * 7702 delegations they want to delegate to a filler on this chain to bring on-chain.
  */
 contract XAccount {
-    error CallReverted(uint256 index, Outbox.Call[] calls);
+    error CallReverted(uint256 index, Call[] calls);
 
-    // Entrypoint function to be called by Outbox contract on this chain. Should pull funds from Outbox
+    // Entrypoint function to be called by DestinationSettler contract on this chain. Should pull funds
     // to user's EOA and then execute calldata that will have it msg.sender = user EOA.
     // Assume user has 7702-delegated code already to this contract, or that the user instructed the filler
     // to submit the 7702 delegation data in the same transaction as the delegated calldata.
@@ -91,8 +93,7 @@ contract XAccount {
     function xExecute(address publicKey, bytes memory userCalldata, bytes calldata signature) external {
         // The user should have signed a data blob containing delegated calldata as well as any 7702 authorization
         // transaction data they wanted the filler to submit on their behalf.
-        (Outbox.CallByUser memory callsByUser, bytes memory authorizationData) =
-            abi.decode(userCalldata, (Outbox.CallByUser, bytes));
+        (CallByUser memory callsByUser, bytes memory authorizationData) = abi.decode(userCalldata, (CallByUser, bytes));
         bytes32 expectedSignedERC7683Message = keccak256(abi.encode(callsByUser, authorizationData));
 
         // Verify that the user signed the data blob.
@@ -108,9 +109,6 @@ contract XAccount {
         view
         returns (bool)
     {
-        // TODO: Verify signed call data hash includes both the expected callByUser data. This might
-        // need to be done in the Outbox contract, but not sure yet. I think its a useful primitive if this contract
-        // always ensures that there is a link between callByUser, signedCallDataHash, and signature.
         return SignatureChecker.isValidSignatureNow(publicKey, signedCallDataHash, signature);
     }
 
@@ -118,7 +116,7 @@ contract XAccount {
         // TODO: Prove that authorizationData was submitted on-chain in this transaction (via tx.authorization?).
     }
 
-    function _attemptCalls(Outbox.Call[] memory calls) internal {
+    function _attemptCalls(Call[] memory calls) internal {
         for (uint256 i = 0; i < calls.length; ++i) {
             // TODO: Validate target
 
@@ -128,7 +126,7 @@ contract XAccount {
         }
     }
 
-    function _fundUser(Outbox.CallByUser memory call) internal {
+    function _fundUser(CallByUser memory call) internal {
         call.asset.token.transferFrom(msg.sender, call.user, call.asset.amount);
     }
 }
