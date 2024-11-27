@@ -38,31 +38,24 @@ import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/Signa
         Call[] calls; // calldata to execute 
     }
 
-    // Pull funds into this settlement contract as escrow and use to execute user's calldata. Escrowed
-    // funds will be paid back to filler after this contract successfully verifies the settled intent.
-    // This step could be skipped by lightweight escrow systems that don't need to perform additional
-    // validation on the filler's actions.
-    function fundUserAndApproveXAccount(CallByUser memory call) public {
-        // TODO: Link the escrowed funds back to the user in case the delegation step fails, we don't want
-        // user to lose access to funds.
-        call.asset.token.transferFrom(msg.sender, address(this), call.asset.amount);
-        call.asset.token.forceApprove(xAccount, call.asset.amount);
-    }
-
     // Called by filler, who sees ERC7683 intent emitted on origin chain
     // containing the callsByUser data to be executed following a 7702 delegation.
     function fill(
         address publicKey,
         bytes calldata signature,
         CallByUser memory callsByUser,
-        bytes32 signedCallDataHash
+        bytes32 signedERC7682Message
     ) external {
+        // First check if the signed ERC7683 intent contained a 7702 delegation to this contract and verify that
+        // the filler is relaying this type 0x04 transaction correctly.
+        _verify7702Delegation(publicKey, signature, signedERC7682Message);
+
         // Pull funds into this settlement contract and perform any steps necessary to ensure that filler
         // receives a refund of their assets. Most importantly, we need to ensure tht the `callsByUser` data 
         // is the same data that was emitted on the origin chain by the `user` in the ERC7683 intent, and secondly
         // that the `publicKey` is the same as the one that signed the `callsByUser` to produce the 
-        // `signedCallDataHash`.
-        fundUserAndApproveXAccount(callsByUser);
+        // `signedERC7682Message`.
+        _fundUserAndApproveXAccount(callsByUser);
 
         // TODO: Protect against duplicate fills.
         // require(!signedCallDataHash, "Already filled");
@@ -77,11 +70,33 @@ import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/Signa
                 publicKey,
                 callsByUser,
                 signature,
-                signedCallDataHash
+                signedERC7682Message
             );
 
         // Perform any final steps required to prove that filler has successfully filled the ERC7683 intent.
         // e.g. emit Executed(...) // this gets picked up on sending chain via receipt proof 
+    }
+
+    // Prove that filler succesfully relayed the ERC7683 intent containing a 7702 delegation
+    // to the xAccount contract on this chain. 
+    function _verify7702Delegation(
+        address publicKey,
+        bytes calldata signature,
+        bytes32 signedERC7682Message
+    ) internal {
+        // TODO: Prove that signedERC7682Message contains the 7702 delegation and that this transaction 
+        // (tx.authorization?) contains the same data including setting XAccount as the code contract.
+    }
+
+    // Pull funds into this settlement contract as escrow and use to execute user's calldata. Escrowed
+    // funds will be paid back to filler after this contract successfully verifies the settled intent.
+    // This step could be skipped by lightweight escrow systems that don't need to perform additional
+    // validation on the filler's actions.
+    function _fundUserAndApproveXAccount(CallByUser memory call) internal {
+        // TODO: Link the escrowed funds back to the user in case the delegation step fails, we don't want
+        // user to lose access to funds.
+        call.asset.token.transferFrom(msg.sender, address(this), call.asset.amount);
+        call.asset.token.forceApprove(xAccount, call.asset.amount);
     }
 }
 
