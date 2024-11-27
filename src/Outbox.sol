@@ -40,21 +40,11 @@ contract Outbox {
 
     // Called by filler, who sees ERC7683 intent emitted on origin chain
     // containing the callsByUser data to be executed following a 7702 delegation.
-    function fill(
-        address publicKey,
-        bytes calldata signature,
-        CallByUser memory callsByUser,
-        bytes32 signedERC7682Message
-    ) external {
-        // First check if the signed ERC7683 intent contained a 7702 delegation to this contract and verify that
-        // the filler is relaying this type 0x04 transaction correctly.
-        _verify7702Delegation(publicKey, signature, signedERC7682Message);
+    function fill(address publicKey, bytes memory userCalldata, bytes calldata signature) external {
+        (CallByUser memory callsByUser,) = abi.decode(userCalldata, (Outbox.CallByUser, bytes));
 
         // Pull funds into this settlement contract and perform any steps necessary to ensure that filler
-        // receives a refund of their assets. Most importantly, we need to ensure tht the `callsByUser` data
-        // is the same data that was emitted on the origin chain by the `user` in the ERC7683 intent, and secondly
-        // that the `publicKey` is the same as the one that signed the `callsByUser` to produce the
-        // `signedERC7682Message`.
+        // receives a refund of their assets.
         _fundUserAndApproveXAccount(callsByUser);
 
         // TODO: Protect against duplicate fills.
@@ -66,19 +56,10 @@ contract Outbox {
         // The following call will only succeed if the user has set a 7702 authorization to set its code
         // equal to the XAccount contract. The filler should have
         // seen the calldata emitted in an `Open` ERC7683 event on the sending chain.
-        XAccount(callsByUser.user).xExecute(publicKey, callsByUser, signature, signedERC7682Message);
+        XAccount(callsByUser.user).xExecute(publicKey, userCalldata, signature);
 
         // Perform any final steps required to prove that filler has successfully filled the ERC7683 intent.
         // e.g. emit Executed(...) // this gets picked up on sending chain via receipt proof
-    }
-
-    // Prove that filler succesfully relayed the ERC7683 intent containing a 7702 delegation
-    // to the xAccount contract on this chain.
-    function _verify7702Delegation(address publicKey, bytes calldata signature, bytes32 signedERC7682Message)
-        internal
-    {
-        // TODO: Prove that signedERC7682Message contains the 7702 delegation and that this transaction
-        // (tx.authorization?) contains the same data including setting XAccount as the code contract.
     }
 
     // Pull funds into this settlement contract as escrow and use to execute user's calldata. Escrowed
@@ -96,26 +77,33 @@ contract Outbox {
 /**
  * @notice Singleton contract used by all users who want to sign data on origin chain and delegate execution of
  * their calldata on this chain to this contract.
- * @dev User must trust that this contract's logic.
+ * @dev User must trust that this contract correctly verifies the user's cross chain signature as well as enforces any
+ * 7702 delegations they want to delegate to a filler on this chain to bring on-chain.
  */
 contract XAccount {
     error CallReverted(uint256 index, Outbox.Call[] calls);
 
     // Entrypoint function to be called by Outbox contract on this chain. Should pull funds from Outbox
     // to user's EOA and then execute calldata that will have it msg.sender = user EOA.
-    // Assume user has 7702-delegated code already to this contract.
-    function xExecute(
-        address publicKey,
-        Outbox.CallByUser memory callByUser,
-        bytes calldata signature,
-        bytes32 signedCallDataHash
-    ) external {
-        _verify(publicKey, signature, signedCallDataHash);
-        _fundUser(callByUser);
-        _attemptCalls(callByUser.calls);
+    // Assume user has 7702-delegated code already to this contract, or that the user instructed the filler
+    // to submit the 7702 delegation data in the same transaction as the delegated calldata.
+    // All calldata and 7702 authorization data is assumed to have been emitted on the origin chain in a ERC7683 intent.
+    function xExecute(address publicKey, bytes memory userCalldata, bytes calldata signature) external {
+        // The user should have signed a data blob containing delegated calldata as well as any 7702 authorization
+        // transaction data they wanted the filler to submit on their behalf.
+        (Outbox.CallByUser memory callsByUser, bytes memory authorizationData) =
+            abi.decode(userCalldata, (Outbox.CallByUser, bytes));
+        bytes32 expectedSignedERC7683Message = keccak256(abi.encode(callsByUser, authorizationData));
+
+        // Verify that the user signed the data blob.
+        _verifySignature(publicKey, signature, expectedSignedERC7683Message);
+        // Verify that the 7702 authorization data was included in the current transaction by the filler.
+        _verify7702Delegation(publicKey, authorizationData);
+        _fundUser(callsByUser);
+        _attemptCalls(callsByUser.calls);
     }
 
-    function _verify(address publicKey, bytes calldata signature, bytes32 signedCallDataHash)
+    function _verifySignature(address publicKey, bytes calldata signature, bytes32 signedCallDataHash)
         internal
         view
         returns (bool)
@@ -124,6 +112,10 @@ contract XAccount {
         // need to be done in the Outbox contract, but not sure yet. I think its a useful primitive if this contract
         // always ensures that there is a link between callByUser, signedCallDataHash, and signature.
         return SignatureChecker.isValidSignatureNow(publicKey, signedCallDataHash, signature);
+    }
+
+    function _verify7702Delegation(address publicKey, bytes memory authorizationData) internal {
+        // TODO: Prove that authorizationData was submitted on-chain in this transaction (via tx.authorization?).
     }
 
     function _attemptCalls(Outbox.Call[] memory calls) internal {
