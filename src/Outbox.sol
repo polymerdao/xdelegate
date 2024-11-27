@@ -18,6 +18,9 @@ import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/Signa
  * to the XAccount contract that the user has set as their delegate code.
  */
  contract Outbox {
+    // The address of the singleton XAccount contract that users have set as their delegate code.
+    address public xAccount = address(2);
+
     struct Asset {
         IERC20 token;
         uint256 amount;
@@ -36,7 +39,9 @@ import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/Signa
     // funds will be paid back to filler after this contract successfully verifies the settled intent.
     function fundUserAndApproveXAccount(CallByUser memory call) public {
         for (uint i = 0; i < call.assets.length; i++) {
-            call.assets[i].token.transferFrom(msg.sender, xAccount, call.assets[i].amount);
+            // TODO: Link the escrowed funds back to the user in case the delegation step fails, we don't want
+            // user to lose access to funds.
+            call.assets[i].token.transferFrom(msg.sender, address(this), call.assets[i].amount);
             call.assets[i].token.forceApprove(xAccount, call.assets[i].amount);
         }
     }
