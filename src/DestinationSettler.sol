@@ -54,7 +54,8 @@ contract DestinationSettler {
         // TODO: Protect fillers from collisions with other fillers.
 
         // The following call will only succeed if the user has set a 7702 authorization to set its code
-        // equal to the XAccount contract. The filler should have
+        // equal to the XAccount contract. This 7702 auth data could have been included in the origin chain
+        // 7683 fillerData and subsequently could be submitted by the filler in a type 4 txn. The filler should have
         // seen the calldata emitted in an `Open` ERC7683 event on the sending chain.
         XAccount(payable(callsByUser.user)).xExecute(publicKey, userCalldata, signature);
 
@@ -81,7 +82,7 @@ contract DestinationSettler {
 /**
  * @notice Singleton contract used by all users who want to sign data on origin chain and delegate execution of
  * their calldata on this chain to this contract.
- * @dev User must trust that this contract correctly verifies the user's cross chain signature as well as enforces any
+ * @dev User must trust that this contract correctly verifies the user's cross chain signature as well as uses any
  * 7702 delegations they want to delegate to a filler on this chain to bring on-chain.
  */
 contract XAccount {
@@ -91,7 +92,7 @@ contract XAccount {
     error InvalidCall(uint256 index, Call[] calls);
 
     // Entrypoint function to be called by DestinationSettler contract on this chain. Should pull funds
-    // to user's EOA and then execute calldata that will have it msg.sender = user EOA.
+    // to user's EOA and then execute calldata might require msg.sender = user EOA.
     // Assume user has 7702-delegated code already to this contract, or that the user instructed the filler
     // to submit the 7702 delegation data in the same transaction as the delegated calldata.
     // All calldata and 7702 authorization data is assumed to have been emitted on the origin chain in a ERC7683 intent.
@@ -103,7 +104,7 @@ contract XAccount {
 
         // Verify that the user signed the data blob.
         _verifySignature(publicKey, signature, expectedSignedERC7683Message);
-        // Verify that the 7702 authorization data was included in the current transaction by the filler.
+        // Verify that any included 7702 authorization data is as expected.
         _verify7702Delegation(publicKey, authorizationData);
         _fundUser(callsByUser);
         _attemptCalls(callsByUser.calls);
@@ -118,7 +119,10 @@ contract XAccount {
     }
 
     function _verify7702Delegation(address publicKey, bytes memory authorizationData) internal {
-        // TODO: Prove that authorizationData was submitted on-chain in this transaction (via tx.authorization?).
+        // TODO: We might not need this function at all, because if the authorization data requires that this contract
+        // is set as the delegation code, then xExecute would fail if the auth data is not submitted by the filler.
+        // However, it might still be useful to verify that authorizationData includes some expected data like
+        // the authorization_list includes chainId=this and address=this. This might not be necessary though.
     }
 
     function _attemptCalls(Call[] memory calls) internal {

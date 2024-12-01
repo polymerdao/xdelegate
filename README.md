@@ -30,7 +30,8 @@ This repository contains contracts and scripts demonstrating this flow.
   - The `open` function also optionally lets the user include a 7702 authorization that the user wants the filler to submit on-chain on their behalf. This can be used to allow the user to set the `code` of their destination chain EOA to the `XAccount` contract.
   - In the 7683 order, includes the 7702 authorization data and the destination chain calldata in a [`FillInstruction`](https://eips.ethereum.org/EIPS/eip-7683#fillerdata)
 - `DestinationSettler`: Destination chain contract that filler interacts with to fulfill a ERC7683 cross-chain intent. The `fill` function is used by the `filler` to credit the user's EOA with any assets that they had deposited on the `OriginSettler` when initiating the 7683 intent and subsequently execute any `calldata` on behalf of the user that was included in the 7683 intent.
-  - The `fill` function will delegate execution of `calldata` to the `XAccount` 7702-compatible proxy contract so it is a prerequisite that the user has already set their destination chain EOA's `code` to `XAccount` via a 7702 transaction.
+  - The `fill` function will delegate execution of `calldata` to the `XAccount` 7702-compatible proxy contract so it is a prerequisite that the user has already set their destination chain EOA's `code` to `XAccount` via a 7702 transaction. The authorization should submitted by the user or delegated
+  to the filler to set.
   - As stated above, the `OriginSettler#open` function can be used by the user to include a 7702 authorization to be submitted by the filler on the destination chain. This way the user can complete the prerequisite 7702 transaction and delegate the `calldata` execution in the same 7683 intent.
 - `XAccount`: Destination chain proxy contract that users should set as their `code` via a 7702 type 4 transaction. Verifies that any calldata execution delegated to it was signed by the expected user.
 
