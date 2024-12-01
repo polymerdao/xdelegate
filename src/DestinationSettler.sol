@@ -61,7 +61,7 @@ contract DestinationSettler {
         // Perform any final steps required to prove that filler has successfully filled the ERC7683 intent.
         // For example, we could emit an event containing a unique hash of the fill that could be proved
         // on the origin chain via a receipt proof + RIP7755.
-        // e.g. emit Executed(userCalldata) 
+        // e.g. emit Executed(userCalldata)
     }
 
     // Pull funds into this settlement contract as escrow and use to execute user's calldata. Escrowed
