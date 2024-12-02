@@ -18,6 +18,8 @@ struct Call {
 struct CallByUser {
     address user; // User who delegated calldata and funded assets on origin chain.
     Asset asset; // token & amount, used to fund execution of calldata
+    uint64 chainId; // should match chain id where calls are to be executed
+    bytes32 delegateCodeHash; // expected code hash of the contract to which the user has delegated execution
     Call[] calls; // calldata to execute
 }
 
@@ -34,9 +36,6 @@ struct CallByUser {
  */
 contract DestinationSettler {
     using SafeERC20 for IERC20;
-
-    // The address of the singleton XAccount contract that users have set as their delegate code.
-    address public xAccount = address(2);
 
     // Called by filler, who sees ERC7683 intent emitted on origin chain
     // containing the callsByUser data to be executed following a 7702 delegation.
@@ -73,7 +72,7 @@ contract DestinationSettler {
         // TODO: Link the escrowed funds back to the user in case the delegation step fails, we don't want
         // user to lose access to funds.
         call.asset.token.safeTransferFrom(msg.sender, address(this), call.asset.amount);
-        call.asset.token.forceApprove(xAccount, call.asset.amount);
+        call.asset.token.forceApprove(call.user, call.asset.amount);
     }
 }
 
@@ -102,6 +101,8 @@ contract XAccount {
         (CallByUser memory callsByUser, bytes memory authorizationData) = abi.decode(userCalldata, (CallByUser, bytes));
         bytes32 expectedSignedERC7683Message = keccak256(abi.encode(callsByUser, authorizationData));
 
+        // TODO: Prevent userCalldata + signature from being replayed.
+
         // Verify that the user signed the data blob.
         _verifySignature(publicKey, signature, expectedSignedERC7683Message);
         // Verify that any included 7702 authorization data is as expected.
@@ -123,6 +124,8 @@ contract XAccount {
         // is set as the delegation code, then xExecute would fail if the auth data is not submitted by the filler.
         // However, it might still be useful to verify that authorizationData includes some expected data like
         // the authorization_list includes chainId=this and address=this. This might not be necessary though.
+
+        // TODO: Can we verify CallsByUser.delegateCodeHash for example?
     }
 
     function _attemptCalls(Call[] memory calls) internal {
