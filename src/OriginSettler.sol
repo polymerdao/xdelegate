@@ -15,9 +15,11 @@ contract OriginSettler {
         uint256 nonce;
         bytes signature;
     }
+
     struct EIP7702AuthData {
         Authorization[] authlist;
     }
+
     struct InputAsset {
         IERC20 token;
         uint256 amount;
@@ -30,12 +32,9 @@ contract OriginSettler {
 
     bytes32 immutable ORDER_DATA_TYPE_HASH = keccak256("TODO");
 
-
-    function openFor(
-        GaslessCrossChainOrder calldata order,
-        bytes calldata signature,
-        bytes calldata originFillerData
-    ) external {
+    function openFor(GaslessCrossChainOrder calldata order, bytes calldata signature, bytes calldata originFillerData)
+        external
+    {
         (
             ResolvedCrossChainOrder memory resolvedOrder,
             CallByUser memory calls,
