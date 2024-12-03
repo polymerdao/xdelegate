@@ -43,6 +43,8 @@ contract DestinationSettler {
     function fill(bytes32 orderId, bytes calldata originData, bytes calldata fillerData) external {
         (CallByUser memory callsByUser, OriginSettler.EIP7702AuthData memory authData) =
             abi.decode(originData, (CallByUser, OriginSettler.EIP7702AuthData));
+        // Verify orderId?
+        // require(orderId == keccak256(originData), "Wrong order data");
 
         // Pull funds into this settlement contract and perform any steps necessary to ensure that filler
         // receives a refund of their assets.
@@ -112,26 +114,33 @@ contract XAccount {
         // Verify that the user signed the data blob.
         _verifyCalls(userCalls);
         // Verify that any included 7702 authorization data is as expected.
-        _verify7702Delegation(authorizationData);
+        _verify7702Delegation(userCalls, authorizationData);
         _fundUser(userCalls);
         _attemptCalls(userCalls.calls);
     }
 
     function _verifyCalls(CallByUser memory userCalls) internal view returns (bool) {
-        // // TODO: Ensure that calls is designed to be used with this user.
-        // require(userCalls.user == address(this));
-        // require(userCalls.chainId == block.chainId);
-
-        // TODO: Do we need to do anything with verifying a signature?
-        // return SignatureChecker.isValidSignatureNow(publicKey, signedCallDataHash, signature);
+        // // TODO: How do we verify that userCalls.user is the expected user?
+        require(userCalls.chainId == block.chainid);
     }
 
-    function _verify7702Delegation(OriginSettler.EIP7702AuthData memory authorizationData) internal {
+    function _verify7702Delegation(CallByUser memory userCalls, OriginSettler.EIP7702AuthData memory authorizationData)
+        internal
+    {
         // TODO: We might not need this function at all, because if the authorization data requires that this contract
         // is set as the delegation code, then xExecute would fail if the auth data is not submitted by the filler.
         // However, it might still be useful to verify that authorizationData includes some expected data like
         // the authorization_list includes chainId=this and address=this. This might not be necessary though.
-        // require(authorizationData.authlist[0].chainId == block.chainId);
+        if (authorizationData.authlist.length == 0) {
+            return;
+        }
+        OriginSettler.Authorization memory authList = authorizationData.authlist[0];
+        require(authList.chainId == block.chainid);
+        // TODO: Do we need to do anything with verifying a signature?
+        require(
+            SignatureChecker.isValidSignatureNow(userCalls.user, keccak256(abi.encode(authList)), authList.signature),
+            "Invalid auth signature"
+        );
 
         // TODO: Can we verify CallsByUser.delegateCodeHash for example?
     }

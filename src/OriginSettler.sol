@@ -95,12 +95,12 @@ contract OriginSettler {
             chainId: calls.chainId
         });
 
-        // Minimum outputs that must be pulled from claler on this chain.
+        // Minimum outputs that must be pulled from caller on this chain.
         Output[] memory minReceived = new Output[](1);
         minReceived[0] = Output({
             token: _toBytes32(address(inputAsset.token)),
             amount: inputAsset.amount,
-            recipient: _toBytes32(calls.user),
+            recipient: _toBytes32(msg.sender), // We assume that msg.sender is filler and wants to be repaid on this chain.
             chainId: block.chainid
         });
 
@@ -109,7 +109,7 @@ contract OriginSettler {
         bytes memory originData = abi.encode(calls, authData);
         fillInstructions[0] = FillInstruction({
             destinationChainId: calls.chainId,
-            destinationSettler: _toBytes32(address(123)), // TODO:
+            destinationSettler: _toBytes32(address(123)), // TODO: Should be address of destination settler for destination chain.
             originData: originData
         });
 
