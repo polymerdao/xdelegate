@@ -74,6 +74,7 @@ contract OriginSettler {
             permit,
             signatureTransferDetails,
             order.user,
+            // Make sure signature includes the UserCallData. TODO: We probably need to include AuthData here too.
             ERC7683Permit2Lib.hashOrder(order, ERC7683Permit2Lib.hashUserCallData(calls)), // witness data hash
             ERC7683Permit2Lib.PERMIT2_ORDER_TYPE, // witness data type string
             signature
