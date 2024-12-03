@@ -3,6 +3,7 @@ pragma solidity ^0.8.0;
 import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {OriginSettler} from "./OriginSettler.sol";
 
 struct Asset {
     IERC20 token;
@@ -39,16 +40,17 @@ contract DestinationSettler {
 
     // Called by filler, who sees ERC7683 intent emitted on origin chain
     // containing the callsByUser data to be executed following a 7702 delegation.
-    function fill(address publicKey, bytes memory userCalldata, bytes calldata signature) external {
-        (CallByUser memory callsByUser,) = abi.decode(userCalldata, (CallByUser, bytes));
+    function fill(bytes32 orderId, bytes calldata originData, bytes calldata fillerData) external {
+        (CallByUser memory callsByUser, OriginSettler.EIP7702AuthData memory authData) =
+            abi.decode(originData, (CallByUser, OriginSettler.EIP7702AuthData));
 
         // Pull funds into this settlement contract and perform any steps necessary to ensure that filler
         // receives a refund of their assets.
         _fundUserAndApproveXAccount(callsByUser);
 
         // TODO: Protect against duplicate fills.
-        // require(!signedCallDataHash, "Already filled");
-        // fills[signedCallDataHash] = true;
+        // require(!orderId, "Already filled");
+        // fills[orderId] = true;
 
         // TODO: Protect fillers from collisions with other fillers.
 
@@ -56,7 +58,7 @@ contract DestinationSettler {
         // equal to the XAccount contract. This 7702 auth data could have been included in the origin chain
         // 7683 fillerData and subsequently could be submitted by the filler in a type 4 txn. The filler should have
         // seen the calldata emitted in an `Open` ERC7683 event on the sending chain.
-        XAccount(payable(callsByUser.user)).xExecute(publicKey, userCalldata, signature);
+        XAccount(payable(callsByUser.user)).xExecute(orderId, callsByUser, authData);
 
         // Perform any final steps required to prove that filler has successfully filled the ERC7683 intent.
         // For example, we could emit an event containing a unique hash of the fill that could be proved
@@ -95,35 +97,41 @@ contract XAccount {
     // Assume user has 7702-delegated code already to this contract, or that the user instructed the filler
     // to submit the 7702 delegation data in the same transaction as the delegated calldata.
     // All calldata and 7702 authorization data is assumed to have been emitted on the origin chain in a ERC7683 intent.
-    function xExecute(address publicKey, bytes memory userCalldata, bytes calldata signature) external {
+    function xExecute(
+        bytes32 orderId,
+        CallByUser memory userCalls,
+        OriginSettler.EIP7702AuthData memory authorizationData
+    ) external {
         // The user should have signed a data blob containing delegated calldata as well as any 7702 authorization
         // transaction data they wanted the filler to submit on their behalf.
-        (CallByUser memory callsByUser, bytes memory authorizationData) = abi.decode(userCalldata, (CallByUser, bytes));
-        bytes32 expectedSignedERC7683Message = keccak256(abi.encode(callsByUser, authorizationData));
 
         // TODO: Prevent userCalldata + signature from being replayed.
+        // require(!executions[orderId], "Already executed");
+        // executions[orderId] = true;
 
         // Verify that the user signed the data blob.
-        _verifySignature(publicKey, signature, expectedSignedERC7683Message);
+        _verifyCalls(userCalls);
         // Verify that any included 7702 authorization data is as expected.
-        _verify7702Delegation(publicKey, authorizationData);
-        _fundUser(callsByUser);
-        _attemptCalls(callsByUser.calls);
+        _verify7702Delegation(authorizationData);
+        _fundUser(userCalls);
+        _attemptCalls(userCalls.calls);
     }
 
-    function _verifySignature(address publicKey, bytes calldata signature, bytes32 signedCallDataHash)
-        internal
-        view
-        returns (bool)
-    {
-        return SignatureChecker.isValidSignatureNow(publicKey, signedCallDataHash, signature);
+    function _verifyCalls(CallByUser memory userCalls) internal view returns (bool) {
+        // // TODO: Ensure that calls is designed to be used with this user.
+        // require(userCalls.user == address(this));
+        // require(userCalls.chainId == block.chainId);
+
+        // TODO: Do we need to do anything with verifying a signature?
+        // return SignatureChecker.isValidSignatureNow(publicKey, signedCallDataHash, signature);
     }
 
-    function _verify7702Delegation(address publicKey, bytes memory authorizationData) internal {
+    function _verify7702Delegation(OriginSettler.EIP7702AuthData memory authorizationData) internal {
         // TODO: We might not need this function at all, because if the authorization data requires that this contract
         // is set as the delegation code, then xExecute would fail if the auth data is not submitted by the filler.
         // However, it might still be useful to verify that authorizationData includes some expected data like
         // the authorization_list includes chainId=this and address=this. This might not be necessary though.
+        // require(authorizationData.authlist[0].chainId == block.chainId);
 
         // TODO: Can we verify CallsByUser.delegateCodeHash for example?
     }

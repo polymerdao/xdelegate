@@ -48,7 +48,7 @@ contract OriginSettler {
 
         // TODO: Escrow funds in this contract and release post 7755 proof of settlement? Or use some other
         // method.
-        // _setEscrowedFunds(resolvedOrder);
+        // _setEscrowedFunds(inputAsset);
 
         emit IOriginSettler.Open(keccak256(resolvedOrder.fillInstructions[0].originData), resolvedOrder);
     }
@@ -105,10 +105,12 @@ contract OriginSettler {
         });
 
         FillInstruction[] memory fillInstructions = new FillInstruction[](1);
+        // TODO: Decide what to set as the origin data.
+        bytes memory originData = abi.encode(calls, authData);
         fillInstructions[0] = FillInstruction({
             destinationChainId: calls.chainId,
             destinationSettler: _toBytes32(address(123)), // TODO:
-            originData: abi.encode(calls, authData) // TODO:
+            originData: originData
         });
 
         resolvedOrder = ResolvedCrossChainOrder({
@@ -119,7 +121,7 @@ contract OriginSettler {
             minReceived: minReceived,
             maxSpent: maxSpent,
             fillInstructions: fillInstructions,
-            orderId: keccak256(abi.encode(calls, authData, calls.chainId)) // TODO:
+            orderId: keccak256(originData) // TODO: decide what to set as unique orderId.
         });
     }
 
