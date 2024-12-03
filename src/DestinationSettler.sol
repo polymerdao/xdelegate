@@ -38,6 +38,8 @@ struct CallByUser {
 contract DestinationSettler {
     using SafeERC20 for IERC20;
 
+    mapping(bytes32 => bool) public fillStatuses;
+
     // Called by filler, who sees ERC7683 intent emitted on origin chain
     // containing the callsByUser data to be executed following a 7702 delegation.
     function fill(bytes32 orderId, bytes calldata originData, bytes calldata fillerData) external {
@@ -50,11 +52,11 @@ contract DestinationSettler {
         // receives a refund of their assets.
         _fundUserAndApproveXAccount(callsByUser);
 
-        // TODO: Protect against duplicate fills.
-        // require(!orderId, "Already filled");
-        // fills[orderId] = true;
+        // Protect against duplicate fills.
+        require(!fillStatuses[orderId], "Already filled");
+        fillStatuses[orderId] = true;
 
-        // TODO: Protect fillers from collisions with other fillers.
+        // TODO: Protect fillers from collisions with other fillers. Requires letting user set an exclusive relayer.
 
         // The following call will only succeed if the user has set a 7702 authorization to set its code
         // equal to the XAccount contract. This 7702 auth data could have been included in the origin chain
@@ -94,6 +96,8 @@ contract XAccount {
     error CallReverted(uint256 index, Call[] calls);
     error InvalidCall(uint256 index, Call[] calls);
 
+    mapping(bytes32 => bool) public executionStatuses;
+
     // Entrypoint function to be called by DestinationSettler contract on this chain. Should pull funds
     // to user's EOA and then execute calldata might require msg.sender = user EOA.
     // Assume user has 7702-delegated code already to this contract, or that the user instructed the filler
@@ -108,8 +112,8 @@ contract XAccount {
         // transaction data they wanted the filler to submit on their behalf.
 
         // TODO: Prevent userCalldata + signature from being replayed.
-        // require(!executions[orderId], "Already executed");
-        // executions[orderId] = true;
+        require(!executionStatuses[orderId], "Already executed");
+        executionStatuses[orderId] = true;
 
         // Verify that the user signed the data blob.
         _verifyCalls(userCalls);
