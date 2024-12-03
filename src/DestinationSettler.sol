@@ -6,7 +6,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {OriginSettler} from "./OriginSettler.sol";
 
 struct Asset {
-    IERC20 token;
+    address token;
     uint256 amount;
 }
 
@@ -77,8 +77,8 @@ contract DestinationSettler {
     function _fundUserAndApproveXAccount(CallByUser memory call) internal {
         // TODO: Link the escrowed funds back to the user in case the delegation step fails, we don't want
         // user to lose access to funds.
-        call.asset.token.safeTransferFrom(msg.sender, address(this), call.asset.amount);
-        call.asset.token.forceApprove(call.user, call.asset.amount);
+        IERC20(call.asset.token).safeTransferFrom(msg.sender, address(this), call.asset.amount);
+        IERC20(call.asset.token).forceApprove(call.user, call.asset.amount);
     }
 }
 
@@ -164,7 +164,7 @@ contract XAccount {
     }
 
     function _fundUser(CallByUser memory call) internal {
-        call.asset.token.safeTransferFrom(msg.sender, call.user, call.asset.amount);
+        IERC20(call.asset.token).safeTransferFrom(msg.sender, call.user, call.asset.amount);
     }
 
     // Used if the caller is trying to unwrap the native token to this contract.
