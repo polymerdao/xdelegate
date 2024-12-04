@@ -2,7 +2,14 @@ pragma solidity ^0.8.0;
 
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {GaslessCrossChainOrder, ResolvedCrossChainOrder, IOriginSettler, Output, FillInstruction} from "./ERC7683.sol";
+import {
+    OnchainCrossChainOrder,
+    GaslessCrossChainOrder,
+    ResolvedCrossChainOrder,
+    IOriginSettler,
+    Output,
+    FillInstruction
+} from "./ERC7683.sol";
 import {EIP7702AuthData, CallByUser, Call, Asset} from "./Structs.sol";
 import {IPermit2} from "./IPermit2.sol";
 import {ERC7683Permit2Lib} from "./ERC7683Permit2Lib.sol";
@@ -23,6 +30,37 @@ contract OriginSettler {
 
     mapping(bytes32 => Asset) public pendingOrders;
 
+    /// @notice Opens a cross-chain order
+    /// @dev To be called by the user
+    /// @dev This method must emit the Open event
+    /// @param order The OnchainCrossChainOrder definition
+    function open(OnchainCrossChainOrder calldata order) external {
+        (ResolvedCrossChainOrder memory resolvedOrder,, EIP7702AuthData memory authData, Asset memory inputAsset) =
+            _resolve(order);
+
+        // TODO: Assets should only be releaseable to the filler
+        // on this chain once a proof of fill is submitted in a separate function. Ideally we can use RIP7755
+        // to implement the storage proof escrow system.
+        IERC20(inputAsset.token).safeTransferFrom(msg.sender, address(this), inputAsset.amount);
+        require(pendingOrders[resolvedOrder.orderId].amount > 0, "Order already pending");
+        pendingOrders[resolvedOrder.orderId] = inputAsset;
+
+        // If a 7702 delegation is a prerequisite to executing the user's calldata on the destination chain,
+        // emit the authData here.
+        if (authData.authlist.length > 0) {
+            emit Requested7702Delegation(authData);
+        }
+
+        // The OpenEvent contains originData which is required to make the destination chain fill, so we only
+        // emit the user calls.
+        emit IOriginSettler.Open(keccak256(resolvedOrder.fillInstructions[0].originData), resolvedOrder);
+    }
+
+    /// @notice Opens a gasless cross-chain order on behalf of a user.
+    /// @dev To be called by the filler.
+    /// @dev This method must emit the Open event
+    /// @param order The GaslessCrossChainOrder definition
+    /// @param permit2Signature The user's signature over the order plus any permit 2 witness data
     // @dev We don't use the last parameter `originFillerData` in this function.
     function openFor(GaslessCrossChainOrder calldata order, bytes calldata permit2Signature, bytes calldata) external {
         (
@@ -62,6 +100,37 @@ contract OriginSettler {
         return (abi.decode(orderData, (CallByUser, EIP7702AuthData, Asset)));
     }
 
+    function _resolve(OnchainCrossChainOrder calldata order)
+        internal
+        view
+        returns (
+            ResolvedCrossChainOrder memory resolvedOrder,
+            CallByUser memory calls,
+            EIP7702AuthData memory authData,
+            Asset memory inputAsset
+        )
+    {
+        if (order.orderDataType != ORDER_DATA_TYPE_HASH) {
+            revert WrongOrderDataType();
+        }
+
+        (calls, authData, inputAsset) = decode7683OrderData(order.orderData);
+
+        (Output[] memory maxSpent, Output[] memory minReceived, FillInstruction[] memory fillInstructions) =
+            _resolveCommonStructs(calls, inputAsset);
+
+        resolvedOrder = ResolvedCrossChainOrder({
+            user: msg.sender,
+            originChainId: block.chainid,
+            openDeadline: type(uint32).max, // no deadline since user is msg.sender
+            fillDeadline: order.fillDeadline,
+            minReceived: minReceived,
+            maxSpent: maxSpent,
+            fillInstructions: fillInstructions,
+            orderId: _getOrderId(calls)
+        });
+    }
+
     function _resolveFor(GaslessCrossChainOrder calldata order)
         internal
         view
@@ -86,36 +155,8 @@ contract OriginSettler {
 
         (calls, authData, inputAsset) = decode7683OrderData(order.orderData);
 
-        // Max outputs that filler should spend on destination chain.
-        Output[] memory maxSpent = new Output[](1);
-        maxSpent[0] = Output({
-            token: _toBytes32(calls.asset.token),
-            amount: calls.asset.amount,
-            recipient: _toBytes32(calls.user),
-            chainId: calls.chainId
-        });
-
-        // Minimum outputs that must be pulled from caller on this chain.
-        Output[] memory minReceived = new Output[](1);
-        minReceived[0] = Output({
-            token: _toBytes32(inputAsset.token),
-            amount: inputAsset.amount,
-            recipient: _toBytes32(msg.sender), // We assume that msg.sender is filler and wants to be repaid on this chain.
-            chainId: block.chainid
-        });
-
-        FillInstruction[] memory fillInstructions = new FillInstruction[](1);
-
-        // OriginData will be included on destination chain fill() and it should contain the data needed to execute the
-        // user's intended call. We don't include the authData here as the calldata execution will revert if the
-        // authData isn't submitted as a prerequisite to delegate the user's code. Instead, we emit the authData
-        // in this contract so that the filler submitting the destination chain calldata can use it.
-        bytes memory originData = abi.encode(calls);
-        fillInstructions[0] = FillInstruction({
-            destinationChainId: calls.chainId,
-            destinationSettler: _toBytes32(address(123)), // TODO: Should be address of destination settler for destination chain.
-            originData: originData
-        });
+        (Output[] memory maxSpent, Output[] memory minReceived, FillInstruction[] memory fillInstructions) =
+            _resolveCommonStructs(calls, inputAsset);
 
         resolvedOrder = ResolvedCrossChainOrder({
             user: order.user,
@@ -126,6 +167,45 @@ contract OriginSettler {
             maxSpent: maxSpent,
             fillInstructions: fillInstructions,
             orderId: _getOrderId(calls)
+        });
+    }
+
+    function _resolveCommonStructs(CallByUser memory calls, Asset memory inputAsset)
+        internal
+        view
+        returns (Output[] memory maxSpent, Output[] memory minReceived, FillInstruction[] memory fillInstructions)
+    {
+        // Max outputs that filler should spend on destination chain.
+        maxSpent = new Output[](1);
+        maxSpent[0] = Output({
+            token: _toBytes32(calls.asset.token),
+            amount: calls.asset.amount,
+            recipient: _toBytes32(calls.user),
+            chainId: calls.chainId
+        });
+
+        // Minimum outputs that must be pulled from caller on this chain.
+        // @dev Min outputs is unused in this contract and is not useful when set via `open` because
+        // we don't know the filler's address ahead of time.
+        minReceived = new Output[](1);
+        minReceived[0] = Output({
+            token: _toBytes32(inputAsset.token),
+            amount: inputAsset.amount,
+            recipient: _toBytes32(msg.sender), // We assume that msg.sender is filler and wants to be repaid on this chain.
+            chainId: block.chainid
+        });
+
+        fillInstructions = new FillInstruction[](1);
+
+        // OriginData will be included on destination chain fill() and it should contain the data needed to execute the
+        // user's intended call. We don't include the authData here as the calldata execution will revert if the
+        // authData isn't submitted as a prerequisite to delegate the user's code. Instead, we emit the authData
+        // in this contract so that the filler submitting the destination chain calldata can use it.
+        bytes memory originData = abi.encode(calls);
+        fillInstructions[0] = FillInstruction({
+            destinationChainId: calls.chainId,
+            destinationSettler: _toBytes32(address(123)), // TODO: Should be address of destination settler for destination chain.
+            originData: originData
         });
     }
 
