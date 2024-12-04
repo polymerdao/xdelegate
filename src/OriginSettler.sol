@@ -203,7 +203,7 @@ contract OriginSettler {
             chainId: calls.chainId
         });
 
-        // Minimum outputs that are returned to filler. 
+        // Minimum outputs that are returned to filler.
         // We don't use this in this contract since we can't guarantee who the filler will be
         // on the destination chain. The filler can call `repayFiller` to get their funds back by
         // submitting a proof of their fill.
