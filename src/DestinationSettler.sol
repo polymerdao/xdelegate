@@ -4,6 +4,8 @@ import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/Signa
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {OriginSettler} from "./OriginSettler.sol";
+import {GaslessCrossChainOrder} from "./ERC7683.sol";
+import "./ERC7683Permit2Lib.sol";
 
 struct Asset {
     address token;
@@ -50,7 +52,7 @@ contract DestinationSettler {
 
         // Pull funds into this settlement contract and perform any steps necessary to ensure that filler
         // receives a refund of their assets.
-        _fundUserAndApproveXAccount(callsByUser);
+        _fundAndApproveXAccount(callsByUser);
 
         // Protect against duplicate fills.
         require(!fillStatuses[orderId], "Already filled");
@@ -74,7 +76,7 @@ contract DestinationSettler {
     // funds will be paid back to filler after this contract successfully verifies the settled intent.
     // This step could be skipped by lightweight escrow systems that don't need to perform additional
     // validation on the filler's actions.
-    function _fundUserAndApproveXAccount(CallByUser memory call) internal {
+    function _fundAndApproveXAccount(CallByUser memory call) internal {
         // TODO: Link the escrowed funds back to the user in case the delegation step fails, we don't want
         // user to lose access to funds.
         IERC20(call.asset.token).safeTransferFrom(msg.sender, address(this), call.asset.amount);
@@ -140,12 +142,6 @@ contract XAccount {
         }
         OriginSettler.Authorization memory authList = authorizationData.authlist[0];
         require(authList.chainId == block.chainid);
-        // TODO: Do we need to do anything with verifying a signature?
-        require(
-            SignatureChecker.isValidSignatureNow(userCalls.user, keccak256(abi.encode(authList)), authList.signature),
-            "Invalid auth signature"
-        );
-
         // TODO: Can we verify CallsByUser.delegateCodeHash for example?
     }
 
