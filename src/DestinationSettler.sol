@@ -3,28 +3,8 @@ pragma solidity ^0.8.0;
 import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {OriginSettler} from "./OriginSettler.sol";
 import {GaslessCrossChainOrder} from "./ERC7683.sol";
-import "./ERC7683Permit2Lib.sol";
-
-struct Asset {
-    address token;
-    uint256 amount;
-}
-
-struct Call {
-    address target;
-    bytes callData;
-    uint256 value;
-}
-
-struct CallByUser {
-    address user; // User who delegated calldata and funded assets on origin chain.
-    Asset asset; // token & amount, used to fund execution of calldata
-    uint64 chainId; // should match chain id where calls are to be executed
-    bytes32 delegateCodeHash; // expected code hash of the contract to which the user has delegated execution
-    Call[] calls; // calldata to execute
-}
+import {CallByUser, Call} from "./Structs.sol";
 
 /**
  * @notice Destination chain entrypoint contract for fillers relaying cross chain message containing delegated
@@ -44,9 +24,9 @@ contract DestinationSettler {
 
     // Called by filler, who sees ERC7683 intent emitted on origin chain
     // containing the callsByUser data to be executed following a 7702 delegation.
-    function fill(bytes32 orderId, bytes calldata originData, bytes calldata fillerData) external {
-        (CallByUser memory callsByUser, OriginSettler.EIP7702AuthData memory authData) =
-            abi.decode(originData, (CallByUser, OriginSettler.EIP7702AuthData));
+    // @dev We don't use the last parameter `fillerData` in this function.
+    function fill(bytes32 orderId, bytes calldata originData, bytes calldata) external {
+        (CallByUser memory callsByUser) = abi.decode(originData, (CallByUser));
         // Verify orderId?
         // require(orderId == keccak256(originData), "Wrong order data");
 
@@ -61,15 +41,14 @@ contract DestinationSettler {
         // TODO: Protect fillers from collisions with other fillers. Requires letting user set an exclusive relayer.
 
         // The following call will only succeed if the user has set a 7702 authorization to set its code
-        // equal to the XAccount contract. This 7702 auth data could have been included in the origin chain
-        // 7683 fillerData and subsequently could be submitted by the filler in a type 4 txn. The filler should have
-        // seen the calldata emitted in an `Open` ERC7683 event on the sending chain.
-        XAccount(payable(callsByUser.user)).xExecute(orderId, callsByUser, authData);
+        // equal to the XAccount contract. The filler should have seen any auth data emitted in an OriginSettler
+        // event on the sending chain.
+        XAccount(payable(callsByUser.user)).xExecute(orderId, callsByUser);
 
         // Perform any final steps required to prove that filler has successfully filled the ERC7683 intent.
         // For example, we could emit an event containing a unique hash of the fill that could be proved
         // on the origin chain via a receipt proof + RIP7755.
-        // e.g. emit Executed(userCalldata)
+        // e.g. emit Executed(orderId)
     }
 
     // Pull funds into this settlement contract as escrow and use to execute user's calldata. Escrowed
@@ -77,8 +56,6 @@ contract DestinationSettler {
     // This step could be skipped by lightweight escrow systems that don't need to perform additional
     // validation on the filler's actions.
     function _fundAndApproveXAccount(CallByUser memory call) internal {
-        // TODO: Link the escrowed funds back to the user in case the delegation step fails, we don't want
-        // user to lose access to funds.
         IERC20(call.asset.token).safeTransferFrom(msg.sender, address(this), call.asset.amount);
         IERC20(call.asset.token).forceApprove(call.user, call.asset.amount);
     }
@@ -89,8 +66,6 @@ contract DestinationSettler {
 /**
  * @notice Singleton contract used by all users who want to sign data on origin chain and delegate execution of
  * their calldata on this chain to this contract.
- * @dev User must trust that this contract correctly verifies the user's cross chain signature as well as uses any
- * 7702 delegations they want to delegate to a filler on this chain to bring on-chain.
  */
 contract XAccount {
     using SafeERC20 for IERC20;
@@ -101,18 +76,11 @@ contract XAccount {
     mapping(bytes32 => bool) public executionStatuses;
 
     // Entrypoint function to be called by DestinationSettler contract on this chain. Should pull funds
-    // to user's EOA and then execute calldata might require msg.sender = user EOA.
-    // Assume user has 7702-delegated code already to this contract, or that the user instructed the filler
-    // to submit the 7702 delegation data in the same transaction as the delegated calldata.
-    // All calldata and 7702 authorization data is assumed to have been emitted on the origin chain in a ERC7683 intent.
-    function xExecute(
-        bytes32 orderId,
-        CallByUser memory userCalls,
-        OriginSettler.EIP7702AuthData memory authorizationData
-    ) external {
-        // The user should have signed a data blob containing delegated calldata as well as any 7702 authorization
-        // transaction data they wanted the filler to submit on their behalf.
-
+    // to user's EOA and then execute calldata.
+    // Assume user has 7702-delegated code already to this contract.
+    // All calldata and 7702 authorization data is assumed to have been emitted on the origin chain in am ERC7683
+    // intent creation event.
+    function xExecute(bytes32 orderId, CallByUser memory userCalls) external {
         // TODO: Prevent userCalldata + signature from being replayed.
         require(!executionStatuses[orderId], "Already executed");
         executionStatuses[orderId] = true;
@@ -120,29 +88,29 @@ contract XAccount {
         // Verify that the user signed the data blob.
         _verifyCalls(userCalls);
         // Verify that any included 7702 authorization data is as expected.
-        _verify7702Delegation(userCalls, authorizationData);
+        _verify7702Delegation();
         _fundUser(userCalls);
+
+        // TODO: Should we allow user to handle case where the calls fail and they want to specify
+        // a fallback recipient? This might not be neccessary since the user will have pulled funds
+        // into their account so worst case they'll still have access to those funds.
         _attemptCalls(userCalls.calls);
     }
 
-    function _verifyCalls(CallByUser memory userCalls) internal view returns (bool) {
+    function _verifyCalls(CallByUser memory userCalls) internal view {
         // // TODO: How do we verify that userCalls.user is the expected user?
         require(userCalls.chainId == block.chainid);
+        require(
+            SignatureChecker.isValidSignatureNow(
+                userCalls.user, keccak256(abi.encode(userCalls.calls)), userCalls.signature
+            )
+        );
     }
 
-    function _verify7702Delegation(CallByUser memory userCalls, OriginSettler.EIP7702AuthData memory authorizationData)
-        internal
-    {
+    function _verify7702Delegation() internal {
         // TODO: We might not need this function at all, because if the authorization data requires that this contract
         // is set as the delegation code, then xExecute would fail if the auth data is not submitted by the filler.
-        // However, it might still be useful to verify that authorizationData includes some expected data like
-        // the authorization_list includes chainId=this and address=this. This might not be necessary though.
-        if (authorizationData.authlist.length == 0) {
-            return;
-        }
-        OriginSettler.Authorization memory authList = authorizationData.authlist[0];
-        require(authList.chainId == block.chainid);
-        // TODO: Can we verify CallsByUser.delegateCodeHash for example?
+        // However, it might still be useful to verify that the delegate is set correctly, like checking EXTCODEHASH.
     }
 
     function _attemptCalls(Call[] memory calls) internal {

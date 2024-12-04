@@ -3,85 +3,58 @@ pragma solidity ^0.8.0;
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {GaslessCrossChainOrder, ResolvedCrossChainOrder, IOriginSettler, Output, FillInstruction} from "./ERC7683.sol";
-import {CallByUser, Call, Asset} from "./DestinationSettler.sol";
-import "./IPermit2.sol";
-import "./ERC7683Permit2Lib.sol";
+import {EIP7702AuthData, CallByUser, Call, Asset} from "./Structs.sol";
+import {IPermit2} from "./IPermit2.sol";
+import {ERC7683Permit2Lib} from "./ERC7683Permit2Lib.sol";
 
 contract OriginSettler {
     using SafeERC20 for IERC20;
 
     IPermit2 public immutable PERMIT2 = IPermit2(address(0xf00d));
 
-    // codeAddress will be set as the user's `code` on the `chainId` chain.
-    struct Authorization {
-        uint256 chainId;
-        address codeAddress;
-        uint256 nonce;
-        bytes signature;
-    }
-
-    struct EIP7702AuthData {
-        Authorization[] authlist;
-    }
-
     error WrongSettlementContract();
     error WrongChainId();
     error WrongOrderDataType();
     error WrongExclusiveRelayer();
 
+    event Requested7702Delegation(EIP7702AuthData authData);
+
     bytes32 immutable ORDER_DATA_TYPE_HASH = keccak256("TODO");
 
-    function openFor(GaslessCrossChainOrder calldata order, bytes calldata signature, bytes calldata originFillerData)
-        external
-    {
-        // TODO: Do we need to verify that signature is the signed order so that the filler can't just pass in any
-        // order data here? Or will this be implicitly handled by passing the signature into _processPermit2Order?
+    mapping(bytes32 => Asset) public pendingOrders;
+
+    // @dev We don't use the last parameter `originFillerData` in this function.
+    function openFor(GaslessCrossChainOrder calldata order, bytes calldata permit2Signature, bytes calldata) external {
         (
             ResolvedCrossChainOrder memory resolvedOrder,
             CallByUser memory calls,
             EIP7702AuthData memory authData,
             Asset memory inputAsset
-        ) = _resolveFor(order, originFillerData);
+        ) = _resolveFor(order);
 
-        // TODO: Support permit2 or approve+transferFrom flow or something else?
-        // // Verify Permit2 signature and pull user funds into this contract
-        _processPermit2Order(order, calls, inputAsset, signature);
+        // Verify Permit2 signature and pull user funds into this contract. The signature should include
+        // the UserOp and any prerequisite EIP7702 delegation authorizations as witness data so we will doubly
+        // verify the user signed the data to be emitted as originData.
+        _processPermit2Order(order, calls, authData, inputAsset, permit2Signature);
 
-        // TODO: Escrow funds in this contract and release post 7755 proof of settlement? Or use some other
-        // method.
-        // _setEscrowedFunds(inputAsset);
+        // TODO: Permit2 will pull assets into this contract, and they should only be releaseable to the filler
+        // on this chain once a proof of fill is submitted in a separate function. Ideally we can use RIP7755
+        // to implement the storage proof escrow system.
+        require(pendingOrders[resolvedOrder.orderId].amount > 0, "Order already pending");
+        pendingOrders[resolvedOrder.orderId] = inputAsset;
 
+        // If a 7702 delegation is a prerequisite to executing the user's calldata on the destination chain,
+        // emit the authData here.
+        if (authData.authlist.length > 0) {
+            emit Requested7702Delegation(authData);
+        }
+
+        // The OpenEvent contains originData which is required to make the destination chain fill, so we only
+        // emit the user calls.
         emit IOriginSettler.Open(keccak256(resolvedOrder.fillInstructions[0].originData), resolvedOrder);
     }
 
-    function _processPermit2Order(
-        GaslessCrossChainOrder memory order,
-        CallByUser memory calls,
-        Asset memory inputAsset,
-        bytes memory signature
-    ) internal {
-        IPermit2.PermitTransferFrom memory permit = IPermit2.PermitTransferFrom({
-            permitted: IPermit2.TokenPermissions({token: inputAsset.token, amount: inputAsset.amount}),
-            nonce: order.nonce,
-            deadline: order.openDeadline
-        });
-
-        IPermit2.SignatureTransferDetails memory signatureTransferDetails =
-            IPermit2.SignatureTransferDetails({to: address(this), requestedAmount: inputAsset.amount});
-
-        // Pull user funds.
-        PERMIT2.permitWitnessTransferFrom(
-            permit,
-            signatureTransferDetails,
-            order.user,
-            // Make sure signature includes the UserCallData. TODO: We probably need to include AuthData here too.
-            ERC7683Permit2Lib.hashOrder(order, ERC7683Permit2Lib.hashUserCallData(calls)), // witness data hash
-            ERC7683Permit2Lib.PERMIT2_ORDER_TYPE, // witness data type string
-            signature
-        );
-    }
-
-    function decode(bytes memory orderData)
+    function decode7683OrderData(bytes memory orderData)
         public
         pure
         returns (CallByUser memory calls, EIP7702AuthData memory authData, Asset memory asset)
@@ -89,7 +62,7 @@ contract OriginSettler {
         return (abi.decode(orderData, (CallByUser, EIP7702AuthData, Asset)));
     }
 
-    function _resolveFor(GaslessCrossChainOrder calldata order, bytes calldata fillerData)
+    function _resolveFor(GaslessCrossChainOrder calldata order)
         internal
         view
         returns (
@@ -111,8 +84,7 @@ contract OriginSettler {
             revert WrongOrderDataType();
         }
 
-        // TODO: Handle fillerData
-        (calls, authData, inputAsset) = decode(order.orderData);
+        (calls, authData, inputAsset) = decode7683OrderData(order.orderData);
 
         // Max outputs that filler should spend on destination chain.
         Output[] memory maxSpent = new Output[](1);
@@ -133,8 +105,12 @@ contract OriginSettler {
         });
 
         FillInstruction[] memory fillInstructions = new FillInstruction[](1);
-        // TODO: Decide what to set as the origin data.
-        bytes memory originData = abi.encode(calls, authData);
+
+        // OriginData will be included on destination chain fill() and it should contain the data needed to execute the
+        // user's intended call. We don't include the authData here as the calldata execution will revert if the
+        // authData isn't submitted as a prerequisite to delegate the user's code. Instead, we emit the authData
+        // in this contract so that the filler submitting the destination chain calldata can use it.
+        bytes memory originData = abi.encode(calls);
         fillInstructions[0] = FillInstruction({
             destinationChainId: calls.chainId,
             destinationSettler: _toBytes32(address(123)), // TODO: Should be address of destination settler for destination chain.
@@ -149,8 +125,45 @@ contract OriginSettler {
             minReceived: minReceived,
             maxSpent: maxSpent,
             fillInstructions: fillInstructions,
-            orderId: keccak256(originData) // TODO: decide what to set as unique orderId.
+            orderId: _getOrderId(calls)
         });
+    }
+
+    // This needs to be a unique representation of the user op. The CallByUser struct contains a nonce
+    // so the user can guarantee this order is unique by using the nonce+user combination.
+    function _getOrderId(CallByUser memory calls) internal pure returns (bytes32) {
+        return keccak256(abi.encode(calls));
+    }
+
+    function _processPermit2Order(
+        GaslessCrossChainOrder memory order,
+        CallByUser memory calls,
+        EIP7702AuthData memory authData,
+        Asset memory inputAsset,
+        bytes memory signature
+    ) internal {
+        IPermit2.PermitTransferFrom memory permit = IPermit2.PermitTransferFrom({
+            permitted: IPermit2.TokenPermissions({token: inputAsset.token, amount: inputAsset.amount}),
+            nonce: order.nonce,
+            deadline: order.openDeadline
+        });
+
+        IPermit2.SignatureTransferDetails memory signatureTransferDetails =
+            IPermit2.SignatureTransferDetails({to: address(this), requestedAmount: inputAsset.amount});
+
+        // Pull user funds into this contract.
+        PERMIT2.permitWitnessTransferFrom(
+            permit,
+            signatureTransferDetails,
+            order.user,
+            // User should have signed a permit2 blob including the destination chain UserOp and any prerequisite
+            // EIP7702 delegation authorizations.
+            ERC7683Permit2Lib.hashOrder(
+                order, ERC7683Permit2Lib.hashUserCallData(calls), ERC7683Permit2Lib.hashAuthData(authData)
+            ), // witness data hash
+            ERC7683Permit2Lib.PERMIT2_ORDER_TYPE, // witness data type string
+            signature
+        );
     }
 
     function _toBytes32(address input) internal pure returns (bytes32) {
