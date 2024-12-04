@@ -92,6 +92,25 @@ contract OriginSettler {
         emit IOriginSettler.Open(keccak256(resolvedOrder.fillInstructions[0].originData), resolvedOrder);
     }
 
+    function repayFiller(bytes32 orderId, address filler, bytes calldata proof) external {
+        // Note: this flow could be made simpler if there were an ext-sload opcode we could use
+        // to read state from DestinationSettler on remote chain. This would allow us to ask the
+        // node directly to run a storage proof attesting to existence of some remote chain state,
+        // rather than us submitting the proof here.
+
+        // Verify proof of destination chain fill for `orderId`:
+        // - orderId was filled on DestinationSettler
+        // - filler was EOA who called `fill()` and should be repaid.
+
+        // Repay filler
+        Asset memory asset = pendingOrders[orderId];
+        require(asset.amount > 0, "Order not found or already repaid");
+        delete pendingOrders[orderId];
+        IERC20(asset.token).safeTransfer(filler, asset.amount);
+
+        // Emit some event to help Filler track their refund.
+    }
+
     function decode7683OrderData(bytes memory orderData)
         public
         pure
@@ -184,16 +203,11 @@ contract OriginSettler {
             chainId: calls.chainId
         });
 
-        // Minimum outputs that must be pulled from caller on this chain.
-        // @dev Min outputs is unused in this contract and is not useful when set via `open` because
-        // we don't know the filler's address ahead of time.
-        minReceived = new Output[](1);
-        minReceived[0] = Output({
-            token: _toBytes32(inputAsset.token),
-            amount: inputAsset.amount,
-            recipient: _toBytes32(msg.sender), // We assume that msg.sender is filler and wants to be repaid on this chain.
-            chainId: block.chainid
-        });
+        // Minimum outputs that are returned to filler. 
+        // We don't use this in this contract since we can't guarantee who the filler will be
+        // on the destination chain. The filler can call `repayFiller` to get their funds back by
+        // submitting a proof of their fill.
+        minReceived = new Output[](0);
 
         fillInstructions = new FillInstruction[](1);
 
