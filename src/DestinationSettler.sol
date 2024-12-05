@@ -98,11 +98,13 @@ contract XAccount {
     }
 
     function _verifyCalls(CallByUser memory userCalls) internal view {
-        // // TODO: How do we verify that userCalls.user is the expected user?
         require(userCalls.chainId == block.chainid);
+        // @dev address(this) should be the userCall.user's EOA.
+        // TODO: Make the blob to sign EIP712-compatible (i.e. instead of keccak256(abi.encode(...)) set
+        // this to SigningLib.getTypedDataHash(...)
         require(
             SignatureChecker.isValidSignatureNow(
-                userCalls.user, keccak256(abi.encode(userCalls.calls)), userCalls.signature
+                address(this), keccak256(abi.encode(userCalls.calls, userCalls.nonce)), userCalls.signature
             )
         );
     }
