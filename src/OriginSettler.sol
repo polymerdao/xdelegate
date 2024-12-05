@@ -203,11 +203,16 @@ contract OriginSettler {
             chainId: calls.chainId
         });
 
-        // Minimum outputs that are returned to filler.
-        // We don't use this in this contract since we can't guarantee who the filler will be
-        // on the destination chain. The filler can call `repayFiller` to get their funds back by
-        // submitting a proof of their fill.
-        minReceived = new Output[](0);
+        // Minimum outputs that are returned to filler on this chain
+        // The filler can call `repayFiller` to get their funds back by submitting a proof of their fill.
+        minReceived = new Output[](1);
+        minReceived[0] = Output({
+            token: _toBytes32(inputAsset.token),
+            amount: inputAsset.amount,
+            recipient: _toBytes32(address(0)), // We don't know who will be the filler on the destination chain, so set
+            // to default zero address to indicate that the funds should be returned to whoever the filler ends up being
+            chainId: block.chainid // repay filler on this chain
+        });
 
         fillInstructions = new FillInstruction[](1);
 
