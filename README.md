@@ -16,13 +16,13 @@ This repository contains contracts and scripts demonstrating this flow.
 2. (optional) User signs destination 7702 delegation.
 3. User creates 7683 order containing 1 & 2.
 4. User sends `open` transaction on origin chain `OriginSettler`
-5  Relayer sees 7683 order.
+5  Relayer sees 7683 order
 6. Relayer sends fill on destination chain `DestinationSettler`
 7. If fill requires user delegation to be set up, relayer must include this in their fill txn, which should be a type 4 txn.
 8. Fill sends the funds to the user’s EOA.
 9. Fill calls `XAccount.xExecute` on user’s EOA with the UserOp
-10.  User’s EOA performs UserOp.
-11.  If fill is submitted successfully and as user ordered in 7683 order, filler gets refund
+10. **User’s EOA performs UserOp** where the `msg.sender` is now set to the user's EOA and the `code` is set to the `XAccount`
+11. If fill is submitted successfully and as user ordered in 7683 order, filler gets refund
 
 ## On-chain Components
 
@@ -43,7 +43,7 @@ This repository contains contracts and scripts demonstrating this flow.
 
 The main architecture decision we made was whether to place the destination chain signature verification logic in the `DestinationSettler` or the `XAccount` contract. By placing this in the latter, we are implicitly encouraging there to be many different types of destination chain settlement contracts, that offer different fulfillment guarantees and features to fillers, that all delegate UserOp execution to a singleton `XAccount` contract. The user needs to trust that `XAccount` will do what its supposed to do.
 
-The alternative would be to instead encourage that the `DestinationSettler` contract is a singleton contract that should be trusted by users. Any fulfillment logic enforced in the settlement contract would be shared across all users. This would make the `XAccount` contract much simpler. We decided against this as we believe there are opinionated settlement contract features that would greatly improve user and filler UX but that we didn't want to include in a singleton contract. 
+The alternative would be to instead encourage that the `DestinationSettler` contract is a singleton contract that should be trusted by users. Any fulfillment logic enforced in the settlement contract would be shared across all users. This would make the `XAccount` contract much simpler. We decided against this as we believe there are opinionated settlement contract features that would greatly improve user and filler UX but that we didn't want to include in a singleton contract.
 
 For example, the settlement contract should ideally protect against duplicate fulfillment of the same 7683 order and simultaneously allow the user to protect fillers from colliding fill transactions. These features would require the `fill` function on the settlement contract to include parameters like `exclusiveRelayer` and enforce logic like checking if `fillStatuses[fillHash] = true`. But, we believe there are strong arguments for why these features are opinionated and do not belong in a generalized `DestinationSettler` contract.
 
