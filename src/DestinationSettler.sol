@@ -1,5 +1,6 @@
 pragma solidity ^0.8.0;
 
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -17,7 +18,7 @@ import {CallByUser, Call} from "./Structs.sol";
  * combine its logic with the XAccount contract to avoid the extra transferFrom and approve steps required in a more
  * complex escrow system.
  */
-contract DestinationSettler {
+contract DestinationSettler is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     mapping(bytes32 => bool) public fillStatuses;
@@ -25,20 +26,20 @@ contract DestinationSettler {
     // Called by filler, who sees ERC7683 intent emitted on origin chain
     // containing the callsByUser data to be executed following a 7702 delegation.
     // @dev We don't use the last parameter `fillerData` in this function.
-    function fill(bytes32 orderId, bytes calldata originData, bytes calldata) external {
+    function fill(bytes32 orderId, bytes calldata originData, bytes calldata) external nonReentrant {
         (CallByUser memory callsByUser) = abi.decode(originData, (CallByUser));
         // Verify orderId?
         // require(orderId == keccak256(originData), "Wrong order data");
-
-        // Pull funds into this settlement contract and perform any steps necessary to ensure that filler
-        // receives a refund of their assets.
-        _fundAndApproveXAccount(callsByUser);
 
         // Protect against duplicate fills.
         require(!fillStatuses[orderId], "Already filled");
         fillStatuses[orderId] = true;
 
         // TODO: Protect fillers from collisions with other fillers. Requires letting user set an exclusive relayer.
+
+        // Pull funds into this settlement contract and perform any steps necessary to ensure that filler
+        // receives a refund of their assets.
+        _fundAndApproveXAccount(callsByUser);
 
         // The following call will only succeed if the user has set a 7702 authorization to set its code
         // equal to the XAccount contract. The filler should have seen any auth data emitted in an OriginSettler
@@ -67,7 +68,7 @@ contract DestinationSettler {
  * @notice Singleton contract used by all users who want to sign data on origin chain and delegate execution of
  * their calldata on this chain to this contract.
  */
-contract XAccount {
+contract XAccount is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     error CallReverted(uint256 index, Call[] calls);
@@ -80,7 +81,7 @@ contract XAccount {
     // Assume user has 7702-delegated code already to this contract.
     // All calldata and 7702 authorization data is assumed to have been emitted on the origin chain in am ERC7683
     // intent creation event.
-    function xExecute(bytes32 orderId, CallByUser memory userCalls) external {
+    function xExecute(bytes32 orderId, CallByUser memory userCalls) external nonReentrant {
         // TODO: Prevent userCalldata + signature from being replayed.
         require(!executionStatuses[orderId], "Already executed");
         executionStatuses[orderId] = true;

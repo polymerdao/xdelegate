@@ -1,5 +1,6 @@
 pragma solidity ^0.8.0;
 
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {
@@ -14,7 +15,7 @@ import {EIP7702AuthData, CallByUser, Call, Asset} from "./Structs.sol";
 import {IPermit2} from "./IPermit2.sol";
 import {ERC7683Permit2Lib} from "./ERC7683Permit2Lib.sol";
 
-contract OriginSettler {
+contract OriginSettler is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     IPermit2 public immutable PERMIT2 = IPermit2(address(0xf00d));
@@ -34,16 +35,17 @@ contract OriginSettler {
     /// @dev To be called by the user
     /// @dev This method must emit the Open event
     /// @param order The OnchainCrossChainOrder definition
-    function open(OnchainCrossChainOrder calldata order) external {
+    function open(OnchainCrossChainOrder calldata order) external nonReentrant {
         (ResolvedCrossChainOrder memory resolvedOrder,, EIP7702AuthData memory authData, Asset memory inputAsset) =
             _resolve(order);
+
+        require(pendingOrders[resolvedOrder.orderId].amount > 0, "Order already pending");
+        pendingOrders[resolvedOrder.orderId] = inputAsset;
 
         // TODO: Assets should only be releaseable to the filler
         // on this chain once a proof of fill is submitted in a separate function. Ideally we can use RIP7755
         // to implement the storage proof escrow system.
         IERC20(inputAsset.token).safeTransferFrom(msg.sender, address(this), inputAsset.amount);
-        require(pendingOrders[resolvedOrder.orderId].amount > 0, "Order already pending");
-        pendingOrders[resolvedOrder.orderId] = inputAsset;
 
         // If a 7702 delegation is a prerequisite to executing the user's calldata on the destination chain,
         // emit the authData here.
@@ -62,7 +64,10 @@ contract OriginSettler {
     /// @param order The GaslessCrossChainOrder definition
     /// @param permit2Signature The user's signature over the order plus any permit 2 witness data
     // @dev We don't use the last parameter `originFillerData` in this function.
-    function openFor(GaslessCrossChainOrder calldata order, bytes calldata permit2Signature, bytes calldata) external {
+    function openFor(GaslessCrossChainOrder calldata order, bytes calldata permit2Signature, bytes calldata)
+        external
+        nonReentrant
+    {
         (
             ResolvedCrossChainOrder memory resolvedOrder,
             CallByUser memory calls,
@@ -70,16 +75,16 @@ contract OriginSettler {
             Asset memory inputAsset
         ) = _resolveFor(order);
 
-        // Verify Permit2 signature and pull user funds into this contract. The signature should include
-        // the UserOp and any prerequisite EIP7702 delegation authorizations as witness data so we will doubly
-        // verify the user signed the data to be emitted as originData.
-        _processPermit2Order(order, calls, authData, inputAsset, permit2Signature);
-
         // TODO: Permit2 will pull assets into this contract, and they should only be releaseable to the filler
         // on this chain once a proof of fill is submitted in a separate function. Ideally we can use RIP7755
         // to implement the storage proof escrow system.
         require(pendingOrders[resolvedOrder.orderId].amount > 0, "Order already pending");
         pendingOrders[resolvedOrder.orderId] = inputAsset;
+
+        // Verify Permit2 signature and pull user funds into this contract. The signature should include
+        // the UserOp and any prerequisite EIP7702 delegation authorizations as witness data so we will doubly
+        // verify the user signed the data to be emitted as originData.
+        _processPermit2Order(order, calls, authData, inputAsset, permit2Signature);
 
         // If a 7702 delegation is a prerequisite to executing the user's calldata on the destination chain,
         // emit the authData here.
@@ -92,7 +97,7 @@ contract OriginSettler {
         emit IOriginSettler.Open(keccak256(resolvedOrder.fillInstructions[0].originData), resolvedOrder);
     }
 
-    function repayFiller(bytes32 orderId, address filler, bytes calldata proof) external {
+    function repayFiller(bytes32 orderId, address filler, bytes calldata proof) external nonReentrant {
         // Note: this flow could be made simpler if there were an ext-sload opcode we could use
         // to read state from DestinationSettler on remote chain. This would allow us to ask the
         // node directly to run a storage proof attesting to existence of some remote chain state,
