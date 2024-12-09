@@ -14,6 +14,7 @@ import {
 import {EIP7702AuthData, CallByUser, Call, Asset} from "./Structs.sol";
 import {IPermit2} from "./IPermit2.sol";
 import {ERC7683Permit2Lib} from "./ERC7683Permit2Lib.sol";
+import {ResolvedCrossChainOrderLib} from "./ResolvedCrossChainOrderLib.sol";
 
 contract OriginSettler is ReentrancyGuard {
     using SafeERC20 for IERC20;
@@ -151,7 +152,7 @@ contract OriginSettler is ReentrancyGuard {
             minReceived: minReceived,
             maxSpent: maxSpent,
             fillInstructions: fillInstructions,
-            orderId: _getOrderId(calls)
+            orderId: ResolvedCrossChainOrderLib.getOrderId(calls)
         });
     }
 
@@ -190,7 +191,7 @@ contract OriginSettler is ReentrancyGuard {
             minReceived: minReceived,
             maxSpent: maxSpent,
             fillInstructions: fillInstructions,
-            orderId: _getOrderId(calls)
+            orderId: ResolvedCrossChainOrderLib.getOrderId(calls)
         });
     }
 
@@ -231,12 +232,6 @@ contract OriginSettler is ReentrancyGuard {
             destinationSettler: _toBytes32(address(123)), // TODO: Should be address of destination settler for destination chain.
             originData: originData
         });
-    }
-
-    // This needs to be a unique representation of the user op. The CallByUser struct contains a nonce
-    // so the user can guarantee this order is unique by using the nonce+user combination.
-    function _getOrderId(CallByUser memory calls) internal pure returns (bytes32) {
-        return keccak256(abi.encode(calls));
     }
 
     function _processPermit2Order(

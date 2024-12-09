@@ -6,6 +6,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {GaslessCrossChainOrder} from "./ERC7683.sol";
 import {CallByUser, Call} from "./Structs.sol";
+import {ResolvedCrossChainOrderLib} from "./ResolvedCrossChainOrderLib.sol";
 
 /**
  * @notice Destination chain entrypoint contract for fillers relaying cross chain message containing delegated
@@ -21,18 +22,21 @@ import {CallByUser, Call} from "./Structs.sol";
 contract DestinationSettler is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
+    /// @notice Store unique orders to prevent duplicate fills for the same order.
     mapping(bytes32 => bool) public fillStatuses;
+
+    error InvalidOrderId();
+    error DuplicateFill();
 
     // Called by filler, who sees ERC7683 intent emitted on origin chain
     // containing the callsByUser data to be executed following a 7702 delegation.
     // @dev We don't use the last parameter `fillerData` in this function.
     function fill(bytes32 orderId, bytes calldata originData, bytes calldata) external nonReentrant {
         (CallByUser memory callsByUser) = abi.decode(originData, (CallByUser));
-        // Verify orderId?
-        // require(orderId == keccak256(originData), "Wrong order data");
+        if (ResolvedCrossChainOrderLib.getOrderId(callsByUser) != orderId) revert InvalidOrderId();
 
         // Protect against duplicate fills.
-        require(!fillStatuses[orderId], "Already filled");
+        if (fillStatuses[orderId]) revert DuplicateFill();
         fillStatuses[orderId] = true;
 
         // TODO: Protect fillers from collisions with other fillers. Requires letting user set an exclusive relayer.
@@ -73,17 +77,22 @@ contract XAccount is ReentrancyGuard {
 
     error CallReverted(uint256 index, Call[] calls);
     error InvalidCall(uint256 index, Call[] calls);
+    error DuplicateExecution();
+    error InvalidExecutionChainId();
+    error InvalidUserSignature();
 
+    /// @notice Store unique user ops to prevent duplicate executions.
     mapping(bytes32 => bool) public executionStatuses;
 
-    // Entrypoint function to be called by DestinationSettler contract on this chain. Should pull funds
-    // to user's EOA and then execute calldata.
-    // Assume user has 7702-delegated code already to this contract.
-    // All calldata and 7702 authorization data is assumed to have been emitted on the origin chain in am ERC7683
-    // intent creation event.
+    /**
+     * @notice Entrypoint function to be called by DestinationSettler contract on this chain. Should pull funds
+     * to user's EOA and then execute calldata.
+     * @dev Assume user has 7702-delegated code already to this contract.
+     * @dev All calldata and 7702 authorization data is assumed to have been emitted on the origin chain in am ERC7683
+     * intent creation event.
+     */
     function xExecute(bytes32 orderId, CallByUser memory userCalls) external nonReentrant {
-        // TODO: Prevent userCalldata + signature from being replayed.
-        require(!executionStatuses[orderId], "Already executed");
+        if (executionStatuses[orderId]) revert DuplicateExecution();
         executionStatuses[orderId] = true;
 
         // Verify that the user signed the data blob.
@@ -99,15 +108,15 @@ contract XAccount is ReentrancyGuard {
     }
 
     function _verifyCalls(CallByUser memory userCalls) internal view {
-        require(userCalls.chainId == block.chainid);
+        if (userCalls.chainId != block.chainid) revert InvalidExecutionChainId();
         // @dev address(this) should be the userCall.user's EOA.
         // TODO: Make the blob to sign EIP712-compatible (i.e. instead of keccak256(abi.encode(...)) set
         // this to SigningLib.getTypedDataHash(...)
-        require(
-            SignatureChecker.isValidSignatureNow(
+        if (
+            !SignatureChecker.isValidSignatureNow(
                 address(this), keccak256(abi.encode(userCalls.calls, userCalls.nonce)), userCalls.signature
             )
-        );
+        ) revert InvalidUserSignature();
     }
 
     function _verify7702Delegation() internal {

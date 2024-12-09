@@ -6,6 +6,7 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {GaslessCrossChainOrder} from "./ERC7683.sol";
 import {CallByUser, Call} from "./Structs.sol";
+import {ResolvedCrossChainOrderLib} from "./ResolvedCrossChainOrderLib.sol";
 
 /**
  * @notice Destination chain entrypoint contract for fillers relaying cross chain message containing delegated
@@ -19,21 +20,25 @@ import {CallByUser, Call} from "./Structs.sol";
 contract DestinationSettler3 is ReentrancyGuard {
     using SafeERC20 for IERC20;
 
+    /// @notice Store unique orders to prevent duplicate fills for the same order.
     mapping(bytes32 => bool) public fillStatuses;
 
     error CallReverted(uint256 index, Call[] calls);
     error InvalidCall(uint256 index, Call[] calls);
+    error InvalidOrderId();
+    error DuplicateFill();
+    error InvalidUserSignature();
+    error InvalidExecutionChainId();
 
     // Called by filler, who sees ERC7683 intent emitted on origin chain
     // containing the callsByUser data to be executed following a 7702 delegation.
     // @dev We don't use the last parameter `fillerData` in this function.
     function fill(bytes32 orderId, bytes calldata originData, bytes calldata) external nonReentrant {
         (CallByUser memory callsByUser) = abi.decode(originData, (CallByUser));
-        // Verify orderId?
-        // require(orderId == keccak256(originData), "Wrong order data");
+        if (ResolvedCrossChainOrderLib.getOrderId(callsByUser) != orderId) revert InvalidOrderId();
 
         // Protect against duplicate fills.
-        require(!fillStatuses[orderId], "Already filled");
+        if (fillStatuses[orderId]) revert DuplicateFill();
         fillStatuses[orderId] = true;
 
         // TODO: Protect fillers from collisions with other fillers. Requires letting user set an exclusive relayer.
@@ -65,14 +70,14 @@ contract DestinationSettler3 is ReentrancyGuard {
     }
 
     function _verifyCalls(CallByUser memory userCalls) internal view {
-        require(userCalls.chainId == block.chainid);
+        if (userCalls.chainId != block.chainid) revert InvalidExecutionChainId();
         // TODO: Make the blob to sign EIP712-compatible (i.e. instead of keccak256(abi.encode(...)) set
         // this to SigningLib.getTypedDataHash(...)
-        require(
-            SignatureChecker.isValidSignatureNow(
+        if (
+            !SignatureChecker.isValidSignatureNow(
                 userCalls.user, keccak256(abi.encode(userCalls.calls, userCalls.nonce)), userCalls.signature
             )
-        );
+        ) revert InvalidUserSignature();
     }
 
     function _verify7702Delegation() internal {
