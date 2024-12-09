@@ -16,13 +16,12 @@ This repository contains contracts and scripts demonstrating this flow.
 2. (optional) User signs destination 7702 delegation.
 3. User creates 7683 order containing 1 & 2.
 4. User sends `open` transaction on origin chain `OriginSettler`
-5  Relayer sees 7683 order
+5. Relayer sees 7683 order
 6. Relayer sends fill on destination chain `DestinationSettler`
 7. (optional) If fill requires user delegation to be set up, relayer must include this in their fill txn, which should be a type 4 txn.
-8. Fill sends the funds to the user’s EOA.
-9. Fill calls `XAccount.xExecute` on user’s EOA with the UserOp
-10. **User’s EOA performs UserOp** where the `msg.sender` is now set to the user's EOA and the `code` is set to the `XAccount`
-11. If fill is submitted successfully and as user ordered in 7683 order, filler gets refund
+8. Fill pulls funds from filler's account to the user’s EOA and then calls `XAccount.xExecute` on user’s EOA with the UserOp
+10. **`XAccount` now executes UserOp within the context of the user's EOA** where the `msg.sender` is now set to the user's EOA and the `code` is set to the `XAccount`
+11. If fill is submitted successfully and as user ordered in 7683 order, filler can get refund
 
 ## On-chain Components
 
