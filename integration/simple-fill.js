@@ -140,7 +140,7 @@ async function main() {
             calls,
             process.env.DESTINATIONSETTLER_ADDRESS,
         ],
-        value: BigInt(1e16), // 0.01 ETH as reward
+        value: BigInt(1e14), // 0.0001 ETH as reward
     })
 
     console.log('Waiting for open transaction:', openTxHash)
