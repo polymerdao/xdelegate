@@ -1,7 +1,7 @@
 import 'dotenv/config'
 import {privateKeyToAccount} from 'viem/accounts'
 import {createWalletClient, createPublicClient, http} from 'viem'
-import {mekong} from 'viem/chains'
+import {base, baseSepolia} from 'viem/chains'
 import SenderCheck from '../out/SenderCheck.sol/SenderCheck.json' assert {type: 'json'}
 import DestinationSettler from '../out/DestinationSettler.sol/DestinationSettler.json' assert {type: 'json'}
 import XAccount from '../out/DestinationSettler.sol/XAccount.json' assert {type: 'json'}
@@ -12,12 +12,12 @@ const deployerKey = process.env.PRIVATE_KEY
 const deployer = privateKeyToAccount(deployerKey)
 
 const walletClient = createWalletClient({
-  chain: mekong,  // Mekong is the only testnet w/ eip-7702 support atm
+  chain: baseSepolia,
   transport: http(),
   account: deployer,
 })
 const client = createPublicClient({
-  chain: mekong,
+  chain: baseSepolia,
   transport: http(),
 })
 
