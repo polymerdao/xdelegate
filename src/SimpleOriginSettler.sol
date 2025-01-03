@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
+
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {ICrossL2Prover} from "vibc-core-smart-contracts/contracts/interfaces/ICrossL2Prover.sol";
 
@@ -34,20 +35,17 @@ contract SimpleOriginSettler is ReentrancyGuard {
     ICrossL2Prover immutable CROSS_L2_PROVER;
 
     constructor(address destinationSettler_, ICrossL2Prover crossL2Prover_) {
+        // NB: This is for testing purposes only. In production, the destination settler should 
+        // be passed in as a part of the order.
         DESTINATION_SETTLER = destinationSettler_;
         CROSS_L2_PROVER = crossL2Prover_;
     }
 
     /**
      * @notice Opens a cross-chain order where user directly signs and submits
-     * @param destinationChainId The chain ID where the calls should be executed
-     * @param destinationSettler Address of the settler contract on destination chain
+     * @param callsByUser The user's cross-chain calls and metadata
      */
-    function open(uint256 destinationChainId, CallByUser calldata callsByUser, address destinationSettler)
-        external
-        payable
-        nonReentrant
-    {
+    function open(CallByUser calldata callsByUser) external payable nonReentrant {
         if (msg.value == 0) revert InsufficientValue();
 
         // Create CallByUser struct for destination chain
@@ -57,8 +55,11 @@ contract SimpleOriginSettler is ReentrancyGuard {
         pendingRewards[orderId] = msg.value;
 
         // Create and emit the resolved order
-        ResolvedCrossChainOrder memory resolvedOrder =
-            _createResolvedOrder(msg.sender, destinationChainId, callsByUser, msg.value, destinationSettler);
+        ResolvedCrossChainOrder memory resolvedOrder = _createResolvedOrder(
+            msg.sender,
+            callsByUser,
+            msg.value
+        );
 
         emit IOriginSettler.Open(keccak256(abi.encode(callsByUser)), resolvedOrder);
     }
@@ -82,7 +83,8 @@ contract SimpleOriginSettler is ReentrancyGuard {
 
         // Now we validate that the event itself was emitted from the destination settler address in the form emit OrderExecuted(orderId);.
 
-        // Note: we'd usually need to validate the chainId but we can skip it in this example since orderId is based on the hash of the chain ID
+        // NB: we'd usually need to validate the chainId but we can skip it in this example 
+        // since we're only dealing with one counterparty chain.
         if (emittingContract != DESTINATION_SETTLER) {
             // This check prevents addresses spoofing the destination settler to emit
             revert invalidEventSender();
@@ -112,10 +114,8 @@ contract SimpleOriginSettler is ReentrancyGuard {
 
     function _createResolvedOrder(
         address user,
-        uint256 destinationChainId,
         CallByUser memory calls,
-        uint256 rewardAmount,
-        address destinationSettler
+        uint256 rewardAmount
     ) internal view returns (ResolvedCrossChainOrder memory) {
         // Only minReceived is relevant - what filler gets paid in ETH
         Output[] memory minReceived = new Output[](1);
@@ -132,8 +132,8 @@ contract SimpleOriginSettler is ReentrancyGuard {
         // Create fill instructions
         FillInstruction[] memory fillInstructions = new FillInstruction[](1);
         fillInstructions[0] = FillInstruction({
-            destinationChainId: uint64(destinationChainId),
-            destinationSettler: _toBytes32(destinationSettler),
+            destinationChainId: uint64(calls.chainId),
+            destinationSettler: _toBytes32(DESTINATION_SETTLER),
             originData: abi.encode(calls)
         });
 

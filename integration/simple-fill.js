@@ -134,7 +134,9 @@ async function main() {
         address: process.env.ORIGINSETTLER_ADDRESS,
         abi: SimpleOriginSettler.abi,
         functionName: 'open',
-        args: [optimismSepolia.id, callsByUser, process.env.DESTINATIONSETTLER_ADDRESS],
+        args: [
+            callsByUser
+        ],
         value: BigInt(1e14), // 0.0001 ETH as reward
     })
 
@@ -199,7 +201,6 @@ async function main() {
     const encodedProof = encodeToHex(proof)
     console.log('Proof encoded:', encodedProof)
 
-    // TODO: Submit proof to SimpleOriginSettler.repayFiller()
     console.log('Submitting proof to claim reward')
     const repayTxHash = await baseClient.writeContract({
         address: process.env.ORIGINSETTLER_ADDRESS,
