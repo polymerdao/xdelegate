@@ -13,5 +13,13 @@
     "@noble/curves": "^1.7.0",
     "dotenv": "^16.4.7",
     "viem": "^2.21.55"
+  },
+  "prettier":{
+    "singleQuote": true,
+    "useTabs": false,
+    "semi": false,
+    "tabWidth": 4,
+    "printWidth": 240 ,
+    "bracketSameLine": true
   }
 }

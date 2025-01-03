@@ -47,7 +47,7 @@ contract DestinationSettlerTest is Test {
                 amount: 0
             }),
             chainId: 31337,
-            signature: signature,
+            signature: hex"",
             calls: calls
         });
 
@@ -62,7 +62,7 @@ contract DestinationSettlerTest is Test {
     
     // NB(bo): The deployed DestinationSettler contract is currently returning a failing signature check
     // while the manual check below using the same values passes.
-    func test_signature_check() public {
+    function test_signature_check() public {
         // manually check signature using Debug log values
         address signer = 0x8589ac73f24dD9135e18cCCe6718E3773FcC5EBD;
         bytes32 hash = 0x94e0128d9fb4d81959e7c6d064e595838084262736b846cd23a5290cec4156c4;
